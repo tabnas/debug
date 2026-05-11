@@ -1,0 +1,43 @@
+{
+  "name": "@tabnas/debug",
+  "version": "0.1.0",
+  "main": "dist/debug.js",
+  "type": "commonjs",
+  "types": "dist/debug.d.ts",
+  "description": "Debug plugin for the tabnas parser — tracing helpers and a describe() method.",
+  "homepage": "https://github.com/rjrodger/tabnas-debug",
+  "keywords": [
+    "tabnas",
+    "debug",
+    "plugin",
+    "parser"
+  ],
+  "author": "Richard Rodger (http://richardrodger.com)",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/rjrodger/tabnas-debug.git"
+  },
+  "scripts": {
+    "test": "node --enable-source-maps --test test/**/*.test.js",
+    "watch": "tsc --build src -w",
+    "build": "tsc --build src",
+    "clean": "rm -rf node_modules dist dist-test yarn.lock package-lock.json",
+    "reset": "npm run clean && npm i && npm run build && npm test"
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./dist/debug.js"
+  },
+  "peerDependencies": {
+    "tabnas": "*"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "tabnas": "*",
+    "typescript": "6.0.3"
+  }
+}
