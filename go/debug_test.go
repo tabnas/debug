@@ -3,11 +3,12 @@
 package debug_test
 
 import (
+	"strings"
 	"testing"
 
-	tabnas "github.com/rjrodger/tabnas/go"
+	tabnas "github.com/tabnas/parser/go"
 
-	debug "github.com/rjrodger/tabnas-debug/go"
+	debug "github.com/tabnas/debug/go"
 )
 
 // TestLoads checks that the plugin value is present, mirroring the
@@ -18,30 +19,48 @@ func TestLoads(t *testing.T) {
 	}
 }
 
-// TestDescribe checks that loading the plugin decorates the instance
-// with a working Describe method, mirroring the "decorates an instance
-// with describe()" case in the TypeScript tests.
-func TestDescribe(t *testing.T) {
-	am := tabnas.New()
-	am.Use(debug.Debug, &debug.Options{Print: false, Trace: nil})
-
-	if am.Debug == nil || am.Debug.Describe == nil {
-		t.Fatal("describe() was not attached to the instance")
+// TestUseAndDescribe checks that the plugin loads onto an instance and
+// that Describe returns a populated grammar dump, mirroring the
+// "decorates an instance with describe()" case in the TypeScript tests.
+func TestUseAndDescribe(t *testing.T) {
+	j := tabnas.Make()
+	if err := j.Use(debug.Debug, map[string]any{"trace": false}); err != nil {
+		t.Fatalf("Use returned error: %v", err)
 	}
-	if _, ok := any(am.Debug.Describe()).(string); !ok {
-		t.Fatal("describe() did not return a string")
+
+	out := debug.Describe(j)
+	if out == "" {
+		t.Fatal("Describe returned an empty string")
+	}
+	for _, header := range []string{
+		"========= TOKENS ========",
+		"========= RULES =========",
+		"========= ALTS =========",
+		"========= LEXER =========",
+		"========= PLUGIN =========",
+	} {
+		if !strings.Contains(out, header) {
+			t.Errorf("Describe output missing section %q", header)
+		}
 	}
 }
 
-// TestDefaults checks that every trace kind is enabled by default, so
-// the Go defaults stay in step with the canonical TypeScript DEFAULTS.
-func TestDefaults(t *testing.T) {
-	if !debug.Defaults.Print {
-		t.Error("Defaults.Print should be true")
+// TestTraceEnables checks that loading with trace enabled does not error
+// and that a subsequent parse runs (trace output goes to stdout).
+func TestTraceEnables(t *testing.T) {
+	j := tabnas.Make()
+	if err := j.Use(debug.Debug, map[string]any{"trace": true}); err != nil {
+		t.Fatalf("Use with trace returned error: %v", err)
 	}
-	for _, kind := range []string{"step", "rule", "lex", "parse", "node", "stack"} {
-		if !debug.Defaults.Trace[kind] {
-			t.Errorf("Defaults.Trace[%q] should be true", kind)
-		}
+	if _, err := j.Parse("1"); err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+}
+
+// TestDefaults checks that tracing is on by default, keeping the Go
+// defaults in step with the canonical TypeScript DEFAULTS.
+func TestDefaults(t *testing.T) {
+	if trace, ok := debug.Defaults["trace"].(bool); !ok || !trace {
+		t.Error(`Defaults["trace"] should be true`)
 	}
 }

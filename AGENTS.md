@@ -6,81 +6,92 @@ update this file in the same change.
 
 ## What this repository is
 
-A debug plugin for the [`tabnas`](https://github.com/rjrodger/tabnas)
-parser. It decorates a parser instance with:
+A debug plugin for the [`tabnas`](https://github.com/tabnas/parser)
+parsing engine. It provides:
 
-- a `describe()` / `Describe()` method that dumps the active grammar
-  (tokens, token sets, rules, alternates, lexer matchers, plugins); and
-- optional parse tracing that logs `step`, `rule`, `lex`, `parse`,
-  `node` and `stack` events as the parser runs.
+- a grammar dump — `describe()` (TypeScript) / `Describe(j)` (Go) — that
+  reports tokens, rules, alternates, lexer matchers and plugins; and
+- parse tracing that logs events as the parser runs.
 
-The plugin reaches into parser internals (`internal().config`, rule
-specs, lexer matchers). It is a developer tool, not part of the parse
-path.
+The plugin is a developer tool, not part of the parse path.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
 | `ts/` | TypeScript / JavaScript implementation (`@tabnas/debug`). **Canonical.** |
-| `go/` | Go implementation (`github.com/rjrodger/tabnas-debug/go`). Kept at parity. |
+| `go/` | Go implementation (`github.com/tabnas/debug/go`). Tracks `ts/`. |
 | `docs/` | Cross-language documentation (see `docs/README.md`). |
+| `scripts/fetch-parser.sh` | Downloads + builds the engine into `vendor/`. |
+| `vendor/` | The fetched engine (git-ignored; created by the script). |
 | `.github/workflows/build.yml` | CI: builds and tests both implementations. |
 
-## The parity rule
+## The parser engine dependency
 
-**TypeScript is canonical.** `ts/src/debug.ts` is the source of truth
-for behaviour, option names, defaults, output format and section
-ordering.
+The engine lives at `github.com/tabnas/parser` — npm package `tabnas`
+(in `parser/ts`) and Go module `github.com/tabnas/parser/go`. It is **not
+published to a registry**, so both implementations consume it from
+source:
 
-When you change behaviour:
+- `scripts/fetch-parser.sh` downloads the engine's GitHub `main` branch
+  over HTTPS into `vendor/tabnas-parser` and builds its TypeScript
+  `dist/`. Pin a different ref with `TABNAS_PARSER_REF`; set
+  `TABNAS_PARSER_SKIP_TS_BUILD=1` to skip the TS build (Go-only).
+- TypeScript references it as `"tabnas": "file:../vendor/tabnas-parser/ts"`
+  in `ts/package.json`.
+- Go requires `github.com/tabnas/parser/go` with a `replace` pointing at
+  `../vendor/tabnas-parser/go` in `go/go.mod`.
 
-1. Change `ts/src/debug.ts` first.
-2. Mirror the change in `go/debug.go`.
-3. Keep the option set, the `Defaults`, the trace kinds, and the
-   `describe()` section order and labels identical across both.
-4. Update `docs/` and the per-language READMEs if the public surface
-   changed.
-
-If you can only change one side, say so explicitly in your summary and
-flag the parity gap — do not silently let the two drift.
+Always run the fetch script before installing/building; the Makefile and
+CI do this automatically.
 
 ## Build and test
-
-The `tabnas` parser is a peer dependency pinned to its GitHub `main`
-branch (`github:rjrodger/tabnas#main` in `ts/package.json`,
-`github.com/rjrodger/tabnas/go` in `go/go.mod`). Both implementations
-need the parser present to build or test; neither can be exercised
-without it.
 
 From the repository root:
 
 ```bash
-make build   # build both implementations
-make test    # test both implementations
+make build   # fetch engine, build both implementations
+make test    # fetch engine, build + test both
 ```
 
-Per language:
+Targeted: `make test-ts`, `make test-go` (each fetches the engine first).
+Both currently pass: TS via Node's test runner, Go via `go test ./...`.
 
-```bash
-make -C ts build && make -C ts test     # or: cd ts && npm i && npm run build && npm test
-make -C go build && make -C go test     # or: cd go && go build ./... && go test ./...
-```
+## The parity rule
+
+**TypeScript is canonical.** `ts/src/debug.ts` is the source of truth for
+behaviour, option names, defaults, output format and section ordering.
+
+When you change behaviour: change TypeScript first, then update Go to
+match as far as the Go engine API allows.
+
+The two engines are not API-identical, so some divergence is real and
+**intended**, not drift:
+
+- TypeScript traces six kinds (`step`, `rule`, `lex`, `parse`, `node`,
+  `stack`) via a context-log hook; the Go engine exposes two streams
+  (`lex`, `rule`) via `Tabnas.Sub`.
+- TypeScript has a `print` option that wraps `use`; the Go engine has no
+  such hook, so the Go plugin omits it.
+- TypeScript attaches `describe` as an instance method; in Go,
+  `Describe(j)` is a package function.
+- Go's `LEXER`/`PLUGIN` sections are summarised — limited to what the
+  engine's public accessors expose.
+
+These are documented in `docs/reference.md`. Keep the shared parts —
+option semantics, `Defaults`, and the `describe` section headers — in
+lockstep, and record any new divergence in the reference.
 
 ## Conventions
 
-- Mirror the canonical TS names: TypeScript `describe` ⇄ Go `Describe`,
-  `DebugOptions` ⇄ `Options`, `DEFAULTS` ⇄ `Defaults`, `trace` ⇄ `Trace`.
-- Trace kinds are exactly: `step`, `rule`, `lex`, `parse`, `node`,
-  `stack`. Add or remove kinds in both implementations together.
-- Keep the `describe()` section headers (`========= TOKENS ========`,
-  etc.) byte-for-byte identical so output can be diffed across languages.
-- Tests mirror each other: see `ts/test/debug.test.js` and
-  `go/debug_test.go`.
+- Keep the `describe` section headers (`========= TOKENS ========`, etc.)
+  byte-for-byte identical across both implementations so output diffs.
+- Tests mirror each other: `ts/test/debug.test.js`, `go/debug_test.go`.
+- Go: run `gofmt` and `go vet ./...` before committing.
 
 ## Documentation
 
-Docs live in `docs/` and are organised by purpose: a learning-oriented
-tutorial, task-oriented how-to guides, a reference, and an explanation
-of how the plugin works. When you add a capability, extend the
-reference and add a how-to if it introduces a new task.
+Docs in `docs/` are organised by purpose: a learning-oriented tutorial,
+task-oriented how-to guides, a reference, and an explanation. When you
+add a capability, extend the reference and add a how-to if it introduces
+a new task.

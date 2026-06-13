@@ -2,20 +2,21 @@
 
 This walkthrough takes you from nothing to a working parser that prints
 its own grammar and traces a parse. By the end you will have loaded the
-plugin, read a grammar description, and watched the parser work step by
-step.
+plugin, read a grammar description, and watched the parser work.
 
-You will need the `tabnas` parser installed alongside the debug plugin.
-Pick the track for your language and follow it top to bottom.
+You will need the [`tabnas`](https://github.com/tabnas/parser) parser
+engine alongside the debug plugin. Pick the track for your language.
 
 ## 1. Set up a project
 
 ### TypeScript / JavaScript
 
+The engine and plugin are consumed from source in this repository. From a
+checkout, fetch the engine and install:
+
 ```bash
-mkdir trace-demo && cd trace-demo
-npm init -y
-npm install tabnas @tabnas/debug
+./scripts/fetch-parser.sh
+cd ts && npm install
 ```
 
 Create `demo.js`:
@@ -31,10 +32,8 @@ am.use(Debug, { print: false, trace: false })
 ### Go
 
 ```bash
-mkdir trace-demo && cd trace-demo
-go mod init trace-demo
-go get github.com/rjrodger/tabnas/go
-go get github.com/rjrodger/tabnas-debug/go
+go get github.com/tabnas/parser/go
+go get github.com/tabnas/debug/go
 ```
 
 Create `main.go`:
@@ -43,47 +42,47 @@ Create `main.go`:
 package main
 
 import (
-	tabnas "github.com/rjrodger/tabnas/go"
-	debug "github.com/rjrodger/tabnas-debug/go"
+	"fmt"
+
+	tabnas "github.com/tabnas/parser/go"
+	debug "github.com/tabnas/debug/go"
 )
 
 func main() {
-	am := tabnas.New()
-	am.Use(debug.Debug, &debug.Options{Print: false, Trace: nil})
-	_ = am
+	j := tabnas.Make()
+	fmt.Println("ready")
+	_ = j
+	_ = debug.Debug
 }
 ```
 
-At this point the plugin is loaded but quiet: printing is off and
-tracing is off.
+At this point the plugin is available but quiet.
 
 ## 2. Describe the grammar
 
-The plugin attached a `describe` method to the instance. Ask it what the
-parser knows.
+Ask the plugin what the parser knows.
 
-TypeScript:
+TypeScript — the plugin attached a `describe` method to the instance:
 
 ```js
 console.log(am.debug.describe())
 ```
 
-Go:
+Go — `Describe` is a package function you pass the instance to:
 
 ```go
-fmt.Println(am.Debug.Describe())
+fmt.Println(debug.Describe(j))
 ```
 
 Run it. You will see a report divided into labelled sections — `TOKENS`,
-`RULES`, `ALTS`, `LEXER`, `PLUGIN` and more. Each section lists part of
-the parser's active configuration. You did not write any grammar yet, so
-this is the parser's built-in default. Skim it; you do not need to
-understand every line. The point is that the grammar is now visible.
+`RULES`, `ALTS`, `LEXER` and `PLUGIN`. Each lists part of the parser's
+active configuration. The engine ships no grammar of its own, so a bare
+instance shows little; add tokens and rules (or load a grammar plugin)
+and they appear here. Skim it — the point is that the grammar is visible.
 
 ## 3. Turn on tracing
 
-Tracing logs what the parser does as it parses. Load the plugin again,
-this time with tracing on, then parse a small input.
+Tracing logs what the parser does as it parses.
 
 TypeScript:
 
@@ -96,34 +95,29 @@ traced('a:1')
 Go:
 
 ```go
-traced := tabnas.New()
-traced.Use(debug.Debug, &debug.Options{Print: false, Trace: debug.Defaults.Trace})
-traced.Parse("a:1")
+j.Use(debug.Debug, map[string]any{"trace": true})
+j.Parse("a:1")
 ```
 
-Run it. Below a `========= TRACE ==========` banner you will see one line
-per parse event: lexer matches (`lex`), rule open/close (`rule`),
-alternate selection (`parse`), node construction (`node`), and the rule
-stack (`stack`). Each line shows where in the source the parser is and
-what it decided.
+Run it. You will see one line per parse event. In TypeScript these are
+tagged `lex`, `rule`, `parse`, `node` and `stack`; in Go you get `[lex]`
+lines (each token produced) and `[rule]` lines (each rule opening and
+closing). Each line shows where in the source the parser is and what it
+decided.
 
 ## 4. Read one trace line
 
-Find a `rule` line. Reading left to right it shows the upcoming source
-text, the current token window, the parse depth, the rule name with its
-instance number and whether it is opening or closing, and its links to
-neighbouring rules. The [reference](reference.md) lists every field; for
-now, notice that you can follow the parser descending into the input and
-coming back out.
+Find a `rule` line. It shows the rule name with its instance number,
+whether it is opening (`o`) or closing (`c`), the parse depth, and the
+node built so far. Follow the lines top to bottom and you can watch the
+parser descend into the input and come back out.
 
 ## What you have learned
 
-You loaded the plugin, printed a grammar with `describe()`, enabled
-tracing, and read the parser's per-event log. From here:
+You loaded the plugin, printed a grammar, enabled tracing, and read the
+parser's per-event log. From here:
 
-- To trace a real parse in your own project, see
-  [Trace a parse](how-to/trace-a-parse.md).
-- To narrow the noise to the events you care about, see
-  [Choose which events to trace](how-to/select-trace-kinds.md).
-- To understand what the trace and `describe()` output mean, see the
-  [Reference](reference.md) and [Explanation](explanation.md).
+- [Trace a parse](how-to/trace-a-parse.md) in your own project.
+- [Choose which events to trace](how-to/select-trace-kinds.md) (TypeScript).
+- The [Reference](reference.md) and [Explanation](explanation.md) cover
+  what the output means and how the plugin works.

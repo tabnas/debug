@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+# Both jobs fetch the tabnas parser engine (its GitHub main branch) from
+# source via scripts/fetch-parser.sh, since it is not published to a
+# registry.
+
 jobs:
   ts:
     strategy:
@@ -16,32 +20,30 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    defaults:
-      run:
-        working-directory: ./ts
-
     steps:
     - uses: actions/checkout@v4
     - name: Use Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
-    - run: npm i
-    - run: npm run build --if-present
-    - run: npm test
+    - name: Fetch and build the tabnas parser engine
+      shell: bash
+      run: ./scripts/fetch-parser.sh
+    - name: Build and test
+      working-directory: ./ts
+      run: |
+        npm install
+        npm run build --if-present
+        npm test
 
   go:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        go-version: [1.23.x]
+        go-version: [1.24.x]
 
     runs-on: ${{ matrix.os }}
-
-    defaults:
-      run:
-        working-directory: ./go
 
     steps:
     - uses: actions/checkout@v4
@@ -49,5 +51,14 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.go-version }}
-    - run: go build ./...
-    - run: go test ./...
+    - name: Fetch the tabnas parser engine (Go only, skip TS build)
+      shell: bash
+      env:
+        TABNAS_PARSER_SKIP_TS_BUILD: "1"
+      run: ./scripts/fetch-parser.sh
+    - name: Build, vet and test
+      working-directory: ./go
+      run: |
+        go build ./...
+        go vet ./...
+        go test ./...

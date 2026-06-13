@@ -1,99 +1,99 @@
 # Reference
 
 Exact behaviour of the `@tabnas/debug` plugin. The TypeScript
-implementation (`ts/src/debug.ts`) is canonical; the Go implementation
-(`go/debug.go`) mirrors it. Names are given in both spellings where they
-differ only by language casing.
+implementation (`ts/src/debug.ts`) is canonical. The Go implementation
+(`go/debug.go`) tracks it functionally, but the two engines expose
+tracing and introspection through different idioms, so the surfaces
+differ in shape. Both are documented below.
 
 ## Entry point
 
 | Language | Symbol | Form |
 |---|---|---|
 | TypeScript | `Debug` | `Plugin` function: `(tabnas, options) => void` |
-| Go | `Debug` | `func(t *tabnas.Tabnas, options *Options)` |
+| Go | `Debug` | `tabnas.Plugin`: `func(j *tabnas.Tabnas, opts map[string]any) error` |
 
-Load it with the parser's `use` / `Use` method:
+Load it with the engine's `use` / `Use` method:
 
 ```js
 am.use(Debug, options)
 ```
 
 ```go
-am.Use(debug.Debug, options)
+j.Use(debug.Debug, opts)   // opts is map[string]any
 ```
-
-Loading the plugin:
-
-1. attaches a `describe` / `Describe` method to the instance;
-2. wraps `use` / `Use` to print the grammar after each load, when
-   `print` is enabled; and
-3. registers a parse-prepare hook that installs a trace logger, when any
-   trace kind is enabled.
 
 ## Options
 
-| Field (TS) | Field (Go) | Type | Meaning |
-|---|---|---|---|
-| `print` | `Print` | boolean | Print the grammar description after every `use` call. |
-| `trace` | `Trace` | per-kind flags | Which parse events to log. See [Trace kinds](#trace-kinds). |
+### TypeScript
 
-The `trace` option may be:
+| Field | Type | Meaning |
+|---|---|---|
+| `print` | boolean | Print the grammar description after every `use` call. |
+| `trace` | `true` / `false` / per-kind flags | Which parse events to log. |
 
-- `true` (TypeScript) — enable all kinds. The plugin copies the default
-  kind set.
-- `false` (TypeScript) / `nil` (Go) — disable tracing entirely. No trace
-  hook is registered.
-- a map/object of kind → boolean — enable only the listed kinds; unlisted
-  kinds are off.
+`trace` may be `true` (all kinds), `false` (off), or an object of
+kind → boolean (only the listed kinds). The kinds are `step`, `rule`,
+`lex`, `parse`, `node`, `stack`.
+
+### Go
+
+| Key | Type | Meaning |
+|---|---|---|
+| `"trace"` | bool | Enable parse tracing (lex + rule events). |
+
+The Go engine drives tracing through instance subscribers
+(`Tabnas.Sub`), which expose two event streams — token (`lex`) and rule.
+The finer TypeScript kinds (`step`, `parse`, `node`, `stack`) and the
+`print` behaviour (which wraps `use`) have no equivalent in the Go engine
+API and are intentionally absent. This is the main documented divergence
+from the canonical behaviour.
 
 ## Defaults
 
-| | `print` / `Print` | `trace` / `Trace` |
+| | TypeScript | Go |
 |---|---|---|
-| value | `true` | all six kinds `true` |
+| symbol | `Debug.defaults` | `debug.Defaults` (a `map[string]any`) |
+| `print` / — | `true` | n/a |
+| `trace` | all kinds `true` | `true` |
 
-In TypeScript the defaults are exposed as `Debug.defaults`; in Go as the
-package variable `debug.Defaults`. The parser merges these with
-caller-supplied options before invoking the plugin.
+## Describing a grammar
 
-## Methods
+| Language | Form |
+|---|---|
+| TypeScript | `am.debug.describe()` — method attached to the instance, returns `string` |
+| Go | `debug.Describe(j)` — package function taking the instance, returns `string` |
 
-### `describe()` / `Describe()`
-
-Returns a `string`: a snapshot of the instance's active configuration.
-Takes no arguments and has no side effects. Safe to call at any time
-after the plugin is loaded.
-
-## Trace kinds
-
-Each enabled kind logs one line per event, under a
-`========= TRACE ==========` banner, to the parser's configured console.
-
-| Kind | Logged when | Key fields |
-|---|---|---|
-| `step` | low-level step | the raw step arguments |
-| `rule` | a rule opens or closes | rule name, instance, open/close state, prev/parent/child links, rule counters |
-| `lex` | a token is produced | token name, source, offset, row:col, matcher name, the active alternate |
-| `parse` | an alternate is evaluated | matched alternate index, its token sequence, push/rule/back actions, condition result, counters |
-| `node` | a node is attached | the reason (`why`), the node value, rule counters |
-| `stack` | the rule stack is reported | parse state, indented rule stack, indented node stack |
-
-Most lines begin with the parse state: the upcoming source text, the
-current token window `[t0 t1]~[tin0 tin1]`, and the parse depth.
-
-## `describe()` output sections
-
-The report contains these sections, in this order, with these exact
-headers:
+Both produce a snapshot of the instance's active configuration with no
+side effects, organised into these sections, in this order, with these
+exact headers:
 
 | Header | Contents |
 |---|---|
-| `========= TOKENS ========` | Each named token, its tin, and its fixed source text (if any). |
-| (token sets) | Each named token set and the tokens it contains. |
-| `========= RULES =========` | Per rule, the distinct push/rule targets for open and close states. |
-| `========= ALTS =========` | Per rule, every open and close alternate: token sequence, actions, counters, condition and group. |
-| `========= LEXER =========` | The ordered lexer matchers and their make-function names. |
-| `========= PLUGIN =========` | Each loaded plugin and its options. |
+| `========= TOKENS ========` | Each token: name, tin, and fixed source text (if any). |
+| `========= RULES =========` | Each rule with its open/close alternate counts (TS also shows push/rule transition targets). |
+| `========= ALTS =========` | Each rule's open and close alternates: token sequence, push (`p`), replace (`r`), backtrack (`b`), counters (`n`), group (`g`). |
+| `========= LEXER =========` | Lexer matchers. TS lists every matcher; Go lists the built-in enable flags plus any custom matchers (the only ones its public API exposes). |
+| `========= PLUGIN =========` | Loaded plugins. TS lists each plugin and its options; Go reports the plugin count (the Go engine stores plugins as bare functions). |
 
-Section headers are byte-for-byte identical across the TypeScript and Go
-implementations so their output can be diffed.
+Section headers are identical across both implementations so output can
+be diffed.
+
+## Trace output
+
+Under tracing, each event prints one line to the instance's console
+(TypeScript) or stdout (Go).
+
+- **TypeScript** logs the enabled kinds (`step`, `rule`, `lex`, `parse`,
+  `node`, `stack`); most lines lead with the parse state — upcoming
+  source, the token window `[t0 t1]~[tin0 tin1]`, and the parse depth.
+- **Go** logs two kinds: `[lex]` lines (token name, tin, source, value,
+  row:col) and `[rule]` lines (rule name, instance, state, depth, node).
+
+## Documented differences (Go vs. canonical TypeScript)
+
+1. Tracing kinds: Go emits `lex` and `rule` only (engine `Sub` API).
+2. No `print` option in Go (the engine does not expose a `use` hook).
+3. `Describe` is a package function in Go, a method in TypeScript.
+4. `LEXER` and `PLUGIN` sections are summarised in Go, limited to what
+   the engine's public API exposes.

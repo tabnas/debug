@@ -2,50 +2,45 @@
 
 Goal: get a readable dump of a parser's active configuration — its
 tokens, rules, alternates, lexer matchers and loaded plugins — without
-running a parse or producing trace noise.
+running a parse.
 
-## Steps
+## TypeScript
 
-1. Load the plugin with both printing and tracing off. You only want the
-   `describe` method, not its side effects.
-
-   TypeScript:
+1. Load the plugin with printing and tracing off; you only want the
+   `describe` method:
 
    ```js
    const am = new Tabnas()
    am.use(Debug, { print: false, trace: false })
    ```
 
-   Go:
-
-   ```go
-   am := tabnas.New()
-   am.Use(debug.Debug, &debug.Options{Print: false, Trace: nil})
-   ```
-
-2. Call `describe` and use the returned string however you like — print
-   it, write it to a file, or compare it against a previous run.
+2. Call `describe` and use the returned string however you like:
 
    ```js
-   const report = am.debug.describe()
-   console.log(report)
+   console.log(am.debug.describe())
    ```
 
-   ```go
-   report := am.Debug.Describe()
-   fmt.Println(report)
-   ```
+## Go
+
+`Describe` is a package function — you do not need to load the plugin to
+call it:
+
+```go
+j := tabnas.Make()
+report := debug.Describe(j)
+fmt.Println(report)
+```
 
 ## Reading the output
 
 The report is divided into labelled sections in a fixed order:
-`TOKENS`, token sets, `RULES`, `ALTS`, `LEXER` and `PLUGIN`. The
-[Reference](../reference.md#describe-output) explains each section.
+`TOKENS`, `RULES`, `ALTS`, `LEXER` and `PLUGIN`. The
+[Reference](../reference.md#describing-a-grammar) explains each, and
+notes where the Go output is summarised relative to TypeScript.
 
 ## Diffing two grammars
 
-Because `describe` returns a plain string and the section order is
-stable, you can capture it before and after adding a plugin or rule and
-diff the two strings to see exactly what changed. The TypeScript and Go
-implementations use identical section headers, so their output can be
-diffed against each other as a parity check.
+Because the section order and headers are stable and identical across
+both implementations, you can capture the output before and after a
+change — or one language against the other — and diff the strings to see
+what differs.

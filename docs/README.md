@@ -5,8 +5,9 @@ parser. It adds a grammar `describe()` method and optional parse tracing
 to a parser instance.
 
 These docs apply to both implementations — the canonical TypeScript
-package (`ts/`) and the Go port (`go/`). Where the API differs only by
-language casing (`describe` vs `Describe`), both spellings are shown.
+package (`ts/`) and the Go port (`go/`). The two engines expose tracing
+and introspection differently, so the examples show each language's real
+API; the [reference](reference.md) lists where they diverge.
 
 Start where your goal fits:
 

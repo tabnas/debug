@@ -1,17 +1,21 @@
 # tabnas-debug (Go)
 
-Debug plugin for the [`tabnas`](https://github.com/rjrodger/tabnas) parser.
+Debug plugin for the [`tabnas`](https://github.com/tabnas/parser) parser
+engine.
 
-Adds tracing helpers and a `Describe()` method to a `*tabnas.Tabnas`
-instance. This is the Go port of the canonical TypeScript implementation
-in [`../ts`](../ts); the TypeScript version is authoritative and this
-package is kept at parity with it.
+Adds parse tracing and a `Describe` function that dumps a parser
+instance's active grammar. This is the Go port of the canonical
+TypeScript implementation in [`../ts`](../ts); the TypeScript version is
+authoritative and this package tracks it. Because the Go engine exposes
+tracing and introspection through different idioms than TypeScript, the
+Go surface differs in shape — see [the reference](../docs/reference.md)
+for the details.
 
 ## Install
 
 ```bash
-go get github.com/rjrodger/tabnas/go
-go get github.com/rjrodger/tabnas-debug/go
+go get github.com/tabnas/parser/go
+go get github.com/tabnas/debug/go
 ```
 
 ## Use
@@ -22,26 +26,35 @@ package main
 import (
 	"fmt"
 
-	tabnas "github.com/rjrodger/tabnas/go"
-	debug "github.com/rjrodger/tabnas-debug/go"
+	tabnas "github.com/tabnas/parser/go"
+	debug "github.com/tabnas/debug/go"
 )
 
 func main() {
-	am := tabnas.New()
-	am.Use(debug.Debug, &debug.Options{Print: false, Trace: nil})
-	fmt.Println(am.Debug.Describe())
+	j := tabnas.Make()
+
+	// Describe the grammar.
+	fmt.Println(debug.Describe(j))
+
+	// Trace a parse (lex + rule events go to stdout).
+	j.Use(debug.Debug, map[string]any{"trace": true})
+	j.Parse("a:1")
 }
 ```
 
 ## Build and test
 
+This repository consumes the engine from source. From the repository
+root, fetch it first, then build and test:
+
 ```bash
-go build ./...
-go test ./...
+./scripts/fetch-parser.sh   # downloads + builds the engine into vendor/
+cd go && go build ./... && go vet ./... && go test ./...
 ```
 
-Both require the `tabnas` parser module to be available; see
-[`go.mod`](go.mod) for the pinned version.
+Or, from the repository root, `make test-go` does all of the above. The
+`go.mod` `replace` directive points the `github.com/tabnas/parser/go`
+requirement at the fetched copy in `../vendor`.
 
 ## License
 

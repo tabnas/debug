@@ -3,17 +3,12 @@
 Goal: see what the parser does, event by event, while it parses a
 specific input.
 
-## Steps
+## TypeScript
 
-1. Create a parser instance dedicated to the traced run. Tracing is
-   wired up when the plugin is loaded, so use a fresh instance rather
-   than toggling it on an existing one.
+1. Use a fresh instance for the traced run — tracing is wired up when the
+   plugin loads.
 
-2. Load the plugin with tracing enabled and printing off (printing is a
-   separate, noisier feature — see
-   [Silence the per-`use` grammar dump](silence-use-output.md)).
-
-   TypeScript:
+2. Load the plugin with tracing on and printing off:
 
    ```js
    const { Tabnas } = require('tabnas')
@@ -23,32 +18,35 @@ specific input.
    am.use(Debug, { print: false, trace: true })
    ```
 
-   Go:
-
-   ```go
-   am := tabnas.New()
-   am.Use(debug.Debug, &debug.Options{Print: false, Trace: debug.Defaults.Trace})
-   ```
-
-3. Parse your input. The trace prints to the console as the parse runs.
+3. Parse your input; the trace prints as it runs:
 
    ```js
    am('{ "a": 1 }')
    ```
 
+4. Read the lines: the leading tag (`lex`, `rule`, `parse`, `node`,
+   `stack`) tells you the event kind. See the
+   [Reference](../reference.md#trace-output) for the fields.
+
+## Go
+
+1. Load the plugin with `"trace": true`, then parse:
+
    ```go
-   am.Parse(`{ "a": 1 }`)
+   j := tabnas.Make()
+   j.Use(debug.Debug, map[string]any{"trace": true})
+   j.Parse(`{ "a": 1 }`)
    ```
 
-4. Read the output under the `========= TRACE ==========` banner. Each
-   line is one event; the leading tag (`lex`, `rule`, `parse`, `node`,
-   `stack`) tells you what kind. See the
-   [Reference](../reference.md#trace-kinds) for the fields on each line.
+2. Trace lines go to stdout. You get `[lex]` lines (one per token) and
+   `[rule]` lines (one per rule open/close). The Go engine exposes these
+   two streams; the finer TypeScript kinds are not available — see the
+   [documented differences](../reference.md#documented-differences-go-vs-canonical-typescript).
 
 ## Notes
 
-- Trace output goes to the parser's configured console. To capture it,
-  redirect or override that console rather than reading a return value —
-  tracing has no return value.
-- If you see no trace output, confirm `trace` is enabled and at least one
-  trace kind is on; see [Choose which events to trace](select-trace-kinds.md).
+- TypeScript trace output goes to the parser's configured console; to
+  capture it, override that console. Go trace output goes to stdout.
+- If you see no output, confirm tracing is enabled (and, in TypeScript,
+  that at least one kind is on — see
+  [Choose which events to trace](select-trace-kinds.md)).

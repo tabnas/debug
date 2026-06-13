@@ -23,12 +23,14 @@ usage lives in [`ts/README.md`](ts/README.md) and
 
 ## Build and test
 
-The `tabnas` parser dependency is pinned to its GitHub `main` branch and
-is required to build or test either implementation.
+Both implementations consume the [`tabnas`](https://github.com/tabnas/parser)
+parser engine. It is not published to a registry, so it is fetched from
+its GitHub `main` branch and built into `vendor/` (git-ignored) by
+`scripts/fetch-parser.sh`. The Makefile runs this for you:
 
 ```bash
-make build   # build both implementations
-make test    # test both implementations
+make build   # fetch engine, build both implementations
+make test    # fetch engine, build + test both
 ```
 
 Contributors and AI agents: see [`AGENTS.md`](AGENTS.md) for repository

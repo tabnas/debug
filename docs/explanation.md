@@ -8,69 +8,62 @@ see the [how-to guides](README.md).
 
 `tabnas` parsers are extended through plugins: functions that receive the
 instance and mutate it. The debug plugin uses exactly this mechanism. It
-adds capabilities by attaching a method and wrapping existing ones,
-rather than by changing the parser. That keeps debugging entirely
-opt-in: a parser with the plugin loaded but its options off behaves like
-one without it.
+adds capabilities by attaching behaviour and subscribing to events,
+rather than by changing the parser. Debugging stays entirely opt-in: a
+parser with the plugin loaded but tracing off behaves like one without
+it.
 
-This is also why the plugin can reach so deeply into the parser. Because
-it runs as a plugin with full access to the instance, it can read
-internal configuration (`internal().config`), the rule table, and the
-lexer's matcher list — the things you need to understand a grammar but
-that the normal parse API does not surface.
+This is also why the plugin can introspect so much. Running as a plugin
+(TypeScript) or through the engine's exported accessors (Go), it can read
+the token table, the rule specs, and the lexer matchers — the things you
+need to understand a grammar but that the normal parse API does not
+surface.
 
-## Three independent features
+## Two features, decoupled
 
-The plugin offers three things, deliberately decoupled so you can take
-only what you need:
+The plugin offers two things you can take separately:
 
-1. **Description** — `describe()` walks the live configuration and
-   renders it as text. It is a pure read: call it whenever, it changes
-   nothing. This is the feature you reach for when you want to know *what
-   grammar the parser currently has*.
+1. **Description** — `describe()` (TypeScript) / `Describe(j)` (Go) walks
+   the live configuration and renders it as text. It is a pure read:
+   call it whenever, it changes nothing. Reach for it when you want to
+   know *what grammar the parser currently has*.
 
-2. **Printing** — when `print` is on, the plugin wraps `use` so that the
-   grammar is dumped after every plugin load. This answers *how did the
-   grammar change as I composed plugins?* It is separate from description
-   because the automatic dump is noisy; you often want `describe()`
-   without it.
+2. **Tracing** — when enabled, the plugin logs what the parser does as it
+   runs. Reach for it when you want to know *what the parser did on this
+   input*.
 
-3. **Tracing** — when any trace kind is on, the plugin registers a hook
-   that runs as a parse begins and installs a logging function the parser
-   calls at each event. This answers *what did the parser do on this
-   input?*
+In TypeScript a third feature, **printing**, wraps `use` to dump the
+grammar after each plugin load. The Go engine exposes no such hook, so
+the Go plugin omits it; call `Describe` on demand instead.
 
-Keeping these independent is why the options are two separate switches
-(`print` and `trace`) rather than one verbosity level.
+## How tracing is installed
 
-## Why tracing is wired at load time
+Tracing is wired when the plugin loads, not toggled per parse — so enable
+it on the instance you intend to trace.
 
-The trace logger is installed through a parse-prepare hook registered
-when the plugin loads — not toggled per parse. The parser calls into the
-logger as it lexes and applies rules, and the logger decides per event
-whether that kind is enabled before formatting anything. Two consequences
-follow:
-
-- Enable tracing on the instance you intend to trace, at load time. The
-  how-to guides use a fresh instance for a traced run for this reason.
-- Filtering by kind is cheap: a disabled kind is rejected before its line
-  is ever built, so leaving the plugin loaded with most kinds off costs
-  little.
+- **TypeScript** registers a parse-prepare hook that installs a logging
+  function the parser calls at each event, and filters by kind before
+  formatting a line. That is why filtering is cheap and why the finer
+  kinds (`step`, `parse`, `node`, `stack`) exist.
+- **Go** subscribes to the engine's two event streams via `Tabnas.Sub`:
+  one for tokens (`lex`) and one for rules. The engine surfaces exactly
+  these two, which is why the Go trace has two kinds rather than six.
 
 ## Why the output format is fixed and shared
 
-The `describe()` sections and the trace line fields use a fixed layout
-with stable headers. This is intentional. Stable, column-aligned text can
-be diffed: before vs. after a change, or one implementation against
-another. The TypeScript and Go ports emit identical section headers
-specifically so that their output can be compared as a parity check —
-the format is part of the contract, not an accident of printing.
+The `describe` sections use a fixed layout with stable, identical headers
+across both implementations. This is intentional: stable text can be
+diffed — before vs. after a change, or one language against the other.
+The format is part of the contract, not an accident of printing.
 
-## Canonical TypeScript, mirrored Go
+## Canonical TypeScript, tracked Go
 
 The TypeScript implementation is the source of truth. The Go port exists
-to make the same debugging available to Go users of the parser, and it
-tracks the TypeScript behaviour rather than evolving on its own. When the
-two could drift — a new trace kind, a changed default, a reordered
-section — the TypeScript side decides and the Go side follows. The shared
-output format is what makes that parity checkable in practice.
+to make the same debugging available to Go users, and it tracks the
+TypeScript behaviour rather than evolving on its own. Where the two
+engines genuinely differ — Go's two trace kinds, its lack of a `print`
+hook, its summarised `LEXER`/`PLUGIN` sections — the gaps are a
+consequence of the engine APIs, and they are written down in the
+[reference](reference.md#documented-differences-go-vs-canonical-typescript)
+rather than left implicit. When behaviour could drift, TypeScript decides
+and Go follows.
