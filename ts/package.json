@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@types/node": "25.6.0",
-    "tabnas": "*",
+    "tabnas": "github:rjrodger/tabnas#main",
     "typescript": "6.0.3"
   }
 }
