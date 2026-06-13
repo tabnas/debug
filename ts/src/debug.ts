@@ -1,4 +1,4 @@
-/* Copyright (c) 2021-2023 Richard Rodger, MIT License */
+/* Copyright (c) 2021-2026 Richard Rodger, MIT License */
 
 /*  debug.ts
  *  Debug plugin — adds tracing helpers and a `describe()` method.
@@ -92,8 +92,6 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
           })
           .join('\n'),
         '\n',
-
-        ,
 
         '========= RULES =========',
         ruleTree(tabnas, keys(rules), rules),
