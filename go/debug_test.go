@@ -81,10 +81,9 @@ func TestDescribeNoPanicMalformedRules(t *testing.T) {
 	rsm["__nil_spec__"] = nil
 	// A rule whose alternate slice contains a nil entry: previously
 	// panicked on a.S in descAltPhase.
-	rsm["__nil_alt__"] = &tabnas.RuleSpec{
-		Name: "__nil_alt__",
-		Open: []*tabnas.AltSpec{nil},
-	}
+	nilAlt := &tabnas.RuleSpec{Name: "__nil_alt__"}
+	nilAlt.AddOpen(nil)
+	rsm["__nil_alt__"] = nilAlt
 
 	out, err := debug.Describe(j)
 	if err != nil {
