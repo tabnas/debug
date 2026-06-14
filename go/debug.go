@@ -179,7 +179,7 @@ func describeRules(j *tabnas.Tabnas) string {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("  %s:\topen=%d close=%d",
-			name, len(rs.Open), len(rs.Close)))
+			name, len(rs.OpenAlts()), len(rs.CloseAlts())))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -195,8 +195,8 @@ func describeAlts(j *tabnas.Tabnas) string {
 		rs := rsm[name]
 		block := "  " + name + ":\n"
 		if rs != nil {
-			block += descAltPhase(j, "OPEN", rs.Open) +
-				descAltPhase(j, "CLOSE", rs.Close)
+			block += descAltPhase(j, "OPEN", rs.OpenAlts()) +
+				descAltPhase(j, "CLOSE", rs.CloseAlts())
 		}
 		blocks = append(blocks, strings.TrimRight(block, "\n"))
 	}
