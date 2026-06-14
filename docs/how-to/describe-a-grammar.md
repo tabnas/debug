@@ -23,11 +23,16 @@ running a parse.
 ## Go
 
 `Describe` is a package function — you do not need to load the plugin to
-call it:
+call it. It returns `(string, error)`: unlike the TypeScript
+`describe()`, the Go form never panics, returning an `"internal"`-code
+error instead if the grammar spec is unrenderable:
 
 ```go
 j := tabnas.Make()
-report := debug.Describe(j)
+report, err := debug.Describe(j)
+if err != nil {
+	// handle the error; report is "" on failure
+}
 fmt.Println(report)
 ```
 

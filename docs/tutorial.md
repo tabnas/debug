@@ -68,10 +68,15 @@ TypeScript — the plugin attached a `describe` method to the instance:
 console.log(am.debug.describe())
 ```
 
-Go — `Describe` is a package function you pass the instance to:
+Go — `Describe` is a package function you pass the instance to. It
+returns `(string, error)`; the error is `nil` for a well-formed instance:
 
 ```go
-fmt.Println(debug.Describe(j))
+report, err := debug.Describe(j)
+if err != nil {
+	panic(err)
+}
+fmt.Println(report)
 ```
 
 Run it. You will see a report divided into labelled sections — `TOKENS`,

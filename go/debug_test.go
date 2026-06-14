@@ -28,7 +28,10 @@ func TestUseAndDescribe(t *testing.T) {
 		t.Fatalf("Use returned error: %v", err)
 	}
 
-	out := debug.Describe(j)
+	out, err := debug.Describe(j)
+	if err != nil {
+		t.Fatalf("Describe returned error: %v", err)
+	}
 	if out == "" {
 		t.Fatal("Describe returned an empty string")
 	}
@@ -62,5 +65,56 @@ func TestTraceEnables(t *testing.T) {
 func TestDefaults(t *testing.T) {
 	if trace, ok := debug.Defaults["trace"].(bool); !ok || !trace {
 		t.Error(`Defaults["trace"] should be true`)
+	}
+}
+
+// TestDescribeNoPanicMalformedRules checks that Describe does not panic on
+// malformed grammar specs that would previously dereference a nil pointer:
+// a nil rule spec and a rule with a nil alternate. Both must render
+// defensively and return without an error, upholding the engine's
+// no-panic guarantee.
+func TestDescribeNoPanicMalformedRules(t *testing.T) {
+	j := tabnas.Make()
+
+	rsm := j.RSM()
+	// A nil rule spec: previously panicked on len(rs.Open).
+	rsm["__nil_spec__"] = nil
+	// A rule whose alternate slice contains a nil entry: previously
+	// panicked on a.S in descAltPhase.
+	rsm["__nil_alt__"] = &tabnas.RuleSpec{
+		Name: "__nil_alt__",
+		Open: []*tabnas.AltSpec{nil},
+	}
+
+	out, err := debug.Describe(j)
+	if err != nil {
+		t.Fatalf("Describe returned error on malformed rules: %v", err)
+	}
+	if out == "" {
+		t.Fatal("Describe returned an empty string on malformed rules")
+	}
+	if !strings.Contains(out, "***INVALID***") {
+		t.Error("Describe should render a nil alternate as ***INVALID***")
+	}
+}
+
+// TestDescribeErrorIsInternal checks that when Describe cannot recover a
+// rendered string it returns an "internal"-code *tabnas.TabnasError and an
+// empty string, mirroring the engine's no-panic guarantee. A nil instance
+// dereferences inside Describe and must surface as an error, not a crash.
+func TestDescribeErrorIsInternal(t *testing.T) {
+	out, err := debug.Describe(nil)
+	if err == nil {
+		t.Fatal("Describe(nil) should return an error, got nil")
+	}
+	if out != "" {
+		t.Errorf("Describe(nil) should return an empty string on error, got %q", out)
+	}
+	te, ok := err.(*tabnas.TabnasError)
+	if !ok {
+		t.Fatalf("Describe(nil) error should be *tabnas.TabnasError, got %T", err)
+	}
+	if te.Code != "internal" {
+		t.Errorf("Describe(nil) error code = %q, want internal", te.Code)
 	}
 }
