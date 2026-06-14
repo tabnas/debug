@@ -33,8 +33,13 @@ import (
 func main() {
 	j := tabnas.Make()
 
-	// Describe the grammar.
-	fmt.Println(debug.Describe(j))
+	// Describe the grammar. Describe returns (string, error): it never
+	// panics, surfacing any failure as an "internal"-code error instead.
+	report, err := debug.Describe(j)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(report)
 
 	// Trace a parse (lex + rule events go to stdout).
 	j.Use(debug.Debug, map[string]any{"trace": true})

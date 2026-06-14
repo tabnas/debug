@@ -62,7 +62,14 @@ from the canonical behaviour.
 | Language | Form |
 |---|---|
 | TypeScript | `am.debug.describe()` — method attached to the instance, returns `string` |
-| Go | `debug.Describe(j)` — package function taking the instance, returns `string` |
+| Go | `debug.Describe(j)` — package function taking the instance, returns `(string, error)` |
+
+The Go form returns an `error` alongside the report to uphold the
+engine's no-panic guarantee: a malformed grammar spec (nil config, nil
+rule spec, nil alternate) is rendered defensively, and any remaining
+panic is recovered and returned as an `"internal"`-code
+`*tabnas.TabnasError` with an empty report string. On success the error
+is `nil`.
 
 Both produce a snapshot of the instance's active configuration with no
 side effects, organised into these sections, in this order, with these
@@ -97,3 +104,6 @@ Under tracing, each event prints one line to the instance's console
 3. `Describe` is a package function in Go, a method in TypeScript.
 4. `LEXER` and `PLUGIN` sections are summarised in Go, limited to what
    the engine's public API exposes.
+5. Go's `Describe` returns `(string, error)` (TS returns a bare
+   `string`): it upholds the engine's no-panic guarantee, surfacing any
+   internal failure as an `"internal"`-code error instead of panicking.
