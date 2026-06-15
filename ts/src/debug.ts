@@ -57,6 +57,10 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
   const { keys, values, entries } = tabnas.util
 
   tabnas.debug = {
+    abnf: function(): string {
+      return emitAbnf(tabnas)
+    },
+
     describe: function(): string {
       let cfg = tabnas.internal().config
       let match = cfg.lex.match
@@ -160,6 +164,10 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
           )
           .join('\n  '),
         '\n',
+
+        '========= ABNF =========',
+        emitAbnf(tabnas),
+        '\n',
       ].join('\n')
     },
   }
@@ -220,6 +228,318 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
       },
     })
   }
+}
+
+// Emit an ABNF representation of the instance's *live* grammar.
+//
+// This reads ONLY the running engine (config + normalised rule specs);
+// it never imports @tabnas/bnf. The mapping is the empirical inverse of
+// bnf's forward encoding (see the round-trip test): tabnas rules become
+// ABNF productions, OPEN alts become `/`-separated alternatives, the
+// token sequence (.s) plus any push/replace target (.p/.r) becomes a
+// space-separated element list, and each token resolves to an ABNF
+// terminal via the fixed-literal / match-regex config.
+//
+// Actions (a.a) carry no ABNF meaning and are ignored. Constructs that
+// cannot be represented (e.g. arbitrary match regexes) are emitted as
+// ABNF comments so the output stays valid and self-documenting, even
+// though such rules will not round-trip.
+function emitAbnf(tabnas: Tabnas): string {
+  const cfg = tabnas.internal().config
+  const rules = tabnas.rule() as Record<string, RuleSpec>
+
+  // bnf wraps grammars in a synthetic '__start__' rule (open .p -> the
+  // real start, close matches #ZZ); skip it and lead with the real start.
+  // A hand-written grammar's cfg.rule.start is itself a real rule, so keep
+  // it and emit it first like any other production.
+  const synthWrapper: string | null =
+    '__start__' === cfg.rule.start ? cfg.rule.start : null
+  let startRule: string | null = synthWrapper ? null : cfg.rule.start
+  if (synthWrapper) {
+    const wrapper: any = rules[synthWrapper]
+    if (wrapper) {
+      for (const alt of wrapper.def.open) {
+        if ('string' === typeof alt.p) {
+          startRule = alt.p
+          break
+        }
+        if ('string' === typeof alt.r) {
+          startRule = alt.r
+          break
+        }
+      }
+    }
+  }
+
+  // tin (number) -> token name (e.g. 18 -> '#RX_..'); use tabnas.token.
+  // name -> tin via cfg.t (which also carries the reverse mapping).
+  const nameToTin = (name: string): number | undefined => {
+    const tin = (cfg.t as any)[name]
+    return 'number' === typeof tin ? tin : undefined
+  }
+
+  // The engine's reserved end-of-source token; never an ABNF element.
+  const endTin = nameToTin('#ZZ')
+
+  // Order productions: real start first, then every other non-wrapper
+  // rule in insertion order, de-duplicated.
+  const ruleNames = Object.keys(rules).filter((rn) => rn !== synthWrapper)
+  const ordered: string[] = []
+  const seen = new Set<string>()
+  if (startRule && rules[startRule]) {
+    ordered.push(startRule)
+    seen.add(startRule)
+  }
+  for (const rn of ruleNames) {
+    if (!seen.has(rn)) {
+      ordered.push(rn)
+      seen.add(rn)
+    }
+  }
+
+  // Every token renders as its bare name in rule bodies; `used` collects
+  // each token's definition for the comment legend printed at the top.
+  const used = new Map<string, string>()
+  const lines: string[] = []
+  for (const rn of ordered) {
+    const rs: any = rules[rn]
+    const alts: string[] = []
+
+    for (const alt of rs.def.open) {
+      alts.push(emitAbnfAlt(tabnas, cfg, alt, endTin, used))
+    }
+
+    // Best-effort: a close-alt that continues into another rule
+    // (.p/.r, ignoring the end-token close) contributes a trailing
+    // reference. Epsilon close alts (no .s/.p/.r) add an empty
+    // alternative so optional/repetition shapes round-trip.
+    // An epsilon close alt (no .s/.p/.r, and not the #ZZ end) means the
+    // close continuation is OPTIONAL — render it as `[ cont ]`.
+    const closeFirstTin = (alt: any) =>
+      Array.isArray(alt.s) && 1 === alt.s.length
+        ? ('number' === typeof alt.s[0] ? alt.s[0] : (cfg.t as any)[alt.s[0]])
+        : undefined
+    const hasEpsilonClose = rs.def.close.some(
+      (alt: any) =>
+        !(null != endTin && closeFirstTin(alt) === endTin) &&
+        (!Array.isArray(alt.s) || 0 === alt.s.length) &&
+        'string' !== typeof alt.p &&
+        'string' !== typeof alt.r,
+    )
+    for (const alt of rs.def.close) {
+      const isEndAlt = null != endTin && closeFirstTin(alt) === endTin
+      if (isEndAlt) continue
+      // Only fold in close continuations that actually reference a rule;
+      // pure capture-actions (no .s/.p/.r) on a head rule are noise.
+      if ('string' === typeof alt.p || 'string' === typeof alt.r) {
+        const cont = emitAbnfAlt(tabnas, cfg, alt, endTin, used)
+        const piece = hasEpsilonClose ? '[ ' + cont + ' ]' : cont
+        if (0 < alts.length) {
+          alts[alts.length - 1] =
+            (alts[alts.length - 1] + ' ' + piece).trim()
+        } else {
+          alts.push(piece)
+        }
+      }
+    }
+
+    // A rule with no usable open alts but an epsilon possibility still
+    // needs to print something; default to an empty alternative.
+    const body = 0 === alts.length ? '' : alts.join(' / ')
+    lines.push(rn + ' = ' + body)
+  }
+
+  // Define each token as its own ABNF rule (named terminals, like the
+  // ABNF core rules e.g. `DIGIT = %x30-39`): a quoted literal, a
+  // char-range, or a prose-val `<...>` for built-in lexer tokens. Emitted
+  // after the grammar productions, with `=` aligned for readability.
+  if (0 < used.size) {
+    const pad = Math.max(...[...used.keys()].map((n) => n.length))
+    lines.push('')
+    for (const [name, form] of used) {
+      lines.push(name.padEnd(pad) + ' = ' + form)
+    }
+  }
+  return lines.join('\n')
+}
+
+// Render a single normalised alt as an ABNF element sequence: each
+// token in .s, then any .p/.r rule reference, space-separated. An alt
+// with no elements renders as the empty string (an empty alternative).
+function emitAbnfAlt(
+  tabnas: Tabnas,
+  cfg: Config,
+  alt: any,
+  endTin: number | undefined,
+  used: Map<string, string>,
+): string {
+  const els: string[] = []
+
+  // .s entries are token *names* (e.g. '#HI'), token *tins* (numbers),
+  // or — in subset form — an array of either. Resolve each to a tin via
+  // the engine's bidirectional token table (cfg.t) before rendering.
+  const toTin = (t: any): number | undefined =>
+    'number' === typeof t ? t : (cfg.t as any)[t]
+
+  // When `b` (backup/lookahead) is set together with a push/replace, the
+  // `.s` tokens are a *predictive peek* — they are matched to choose this
+  // alt but NOT consumed here; the pushed rule consumes them. Emitting
+  // them as terminals would double-count the input, so skip them and let
+  // the rule reference stand alone (this is how bnf encodes FIRST-set
+  // guards and the `[X]` optional-group dispatch).
+  const peekOnly =
+    alt.b && ('string' === typeof alt.p || 'string' === typeof alt.r)
+
+  const seq: any[] = peekOnly || !Array.isArray(alt.s) ? [] : alt.s
+  for (const item of seq) {
+    if (null == item) continue
+    if (Array.isArray(item)) {
+      const inner = item
+        .map(toTin)
+        .filter((t: any): t is number => null != t && t !== endTin)
+        .map((t: number) => emitAbnfTerminal(tabnas, cfg, t, used))
+      if (0 < inner.length) els.push('( ' + inner.join(' / ') + ' )')
+      continue
+    }
+    const tin = toTin(item)
+    if (null == tin || tin === endTin) continue
+    els.push(emitAbnfTerminal(tabnas, cfg, tin, used))
+  }
+
+  // A push/replace target is a forward reference to another production.
+  if ('string' === typeof alt.p) els.push(alt.p)
+  else if ('string' === typeof alt.r) els.push(alt.r)
+
+  return els.join(' ')
+}
+
+// Render a token reference: every token appears by its bare NAME (e.g.
+// '#PL' -> 'PL', '#NR' -> 'NR'), and its definition is recorded in `used`
+// for the comment legend. A token name that is actually a rule name is a
+// nonterminal reference and is returned as-is (no legend entry).
+function emitAbnfTerminal(
+  tabnas: Tabnas,
+  cfg: Config,
+  tin: number,
+  used: Map<string, string>,
+): string {
+  const fullName: string = tabnas.token[tin]
+
+  const rules: any = tabnas.rule()
+  if (fullName && rules[fullName]) {
+    return fullName
+  }
+
+  const name = (fullName || 'T' + tin).replace(/^#/, '')
+  if (!used.has(name)) {
+    used.set(name, abnfTokenForm(cfg, tin, fullName))
+  }
+  return name
+}
+
+// The legend definition for a token — what it matches:
+//   - fixed literal       -> %s"<lit>" (letters) / "<lit>" (punctuation)
+//   - /^<lit>/i (letters) -> "<lit>"     (case-insensitive literal)
+//   - /^[\uXXXX-\uYYYY]/  -> %xXX-YY     (char range)
+//   - built-in matcher    -> <number> / <string> / ...   (lexer-provided)
+function abnfTokenForm(cfg: Config, tin: number, fullName: string): string {
+  const fixedLit = (cfg.fixed.ref as any)[tin]
+  if ('string' === typeof fixedLit) {
+    return /[A-Za-z]/.test(fixedLit)
+      ? '%s"' + fixedLit + '"'
+      : '"' + fixedLit + '"'
+  }
+
+  const re = (cfg.match.token as any)[tin] ?? (cfg.match.token as any)['' + tin]
+  if (re instanceof RegExp) {
+    return regexToAbnf(re)
+  }
+
+  // Built-in lexer token: describe it (it is lexer-provided, so a grammar
+  // using it does not round-trip through bnf).
+  const bare = (fullName || '' + tin).replace(/^#/, '')
+  const desc: Record<string, string> = {
+    NR: 'number',
+    ST: 'string',
+    TX: 'text',
+    VL: 'value',
+    SP: 'space',
+    LN: 'line',
+    CM: 'comment',
+    AA: 'any',
+    UK: 'unknown',
+    BD: 'bad',
+    ZZ: 'end-of-source',
+  }
+  return '<' + (desc[bare] || 'built-in ' + bare) + '>'
+}
+
+// Translate the anchored RegExp bnf installs for a match token back to
+// ABNF, covering the two shapes bnf actually emits.
+function regexToAbnf(re: RegExp): string {
+  // Drop the leading anchor bnf always prepends.
+  let src = re.source
+  if ('^' === src[0]) src = src.slice(1)
+
+  // Single char-class range: [\uXXXX-\uYYYY]  ->  %xXX-YY
+  const range = src.match(
+    /^\[\\u([0-9A-Fa-f]{4})-\\u([0-9A-Fa-f]{4})\]$/,
+  )
+  if (range) {
+    const lo = parseInt(range[1], 16).toString(16).toUpperCase()
+    const hi = parseInt(range[2], 16).toString(16).toUpperCase()
+    return '%x' + lo + '-' + hi
+  }
+
+  // Single char-class range with bare hex escapes: [\xXX-\xYY].
+  const range2 = src.match(/^\[\\x([0-9A-Fa-f]{2})-\\x([0-9A-Fa-f]{2})\]$/)
+  if (range2) {
+    return (
+      '%x' +
+      parseInt(range2[1], 16).toString(16).toUpperCase() +
+      '-' +
+      parseInt(range2[2], 16).toString(16).toUpperCase()
+    )
+  }
+
+  // Case-insensitive literal: bnf encodes a bare ABNF string `"foo"`
+  // that contains at least one letter as `/^<escaped-foo>/i`, where
+  // <escaped-foo> escapes the regex metacharacters \ ^ $ . * + ? ( ) [
+  // ] { } |. Recover the literal by unescaping, then verify the
+  // round-trip so we never misread a genuine regex as a literal.
+  if (re.flags.includes('i')) {
+    // Unescape both the metacharacters bnf escapes and the forward
+    // slash that RegExp.prototype.source escapes automatically.
+    const lit = src.replace(/\\([\\^$.*+?()[\]{}|/])/g, '$1')
+    // Validate: re-encode the candidate exactly as bnf would and confirm
+    // the resulting RegExp source matches, so a real regex is never
+    // mistaken for a literal.
+    const reEncoded = new RegExp('^' + escapeRegExpLike(lit), 'i').source
+    if (reEncoded === re.source && isAbnfQuotable(lit)) {
+      return '"' + lit + '"'
+    }
+  }
+
+  // Anything else: keep it visible but mark it as non-round-tripping.
+  return '; /' + re.source + '/' + re.flags
+}
+
+// Mirror of bnf's escapeRegExp, used only to validate that an unescaped
+// candidate literal re-escapes to exactly the observed regex source.
+function escapeRegExpLike(s: string): string {
+  return s.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
+}
+
+// An ABNF char-val (quoted string) may hold printable ASCII except the
+// double quote: %x20-21 / %x23-7E.
+function isAbnfQuotable(s: string): boolean {
+  if (0 === s.length) return false
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (0x22 === c) return false // double quote
+    if (c < 0x20 || c > 0x7e) return false
+  }
+  return true
 }
 
 function descAlt(tabnas: Tabnas, rs: RuleSpec, kind: 'open' | 'close') {

@@ -14,7 +14,7 @@ import (
 	debug "github.com/tabnas/debug/go"
 )
 
-// headersGolden is the shared cross-runtime fixture of the seven canonical
+// headersGolden is the shared cross-runtime fixture of the eight canonical
 // section headers; the TypeScript suite reads the same file. Keeping both
 // suites pinned to it enforces the diffability claim.
 const headersGolden = "../test/headers.golden"
@@ -77,6 +77,7 @@ func TestUseAndDescribe(t *testing.T) {
 		"========= LEXER =========",
 		"========= CONFIG ========",
 		"========= PLUGIN =========",
+		"========= ABNF =========",
 	} {
 		if !strings.Contains(out, header) {
 			t.Errorf("Describe output missing section %q", header)
@@ -265,7 +266,7 @@ func TestDescribeBodies(t *testing.T) {
 }
 
 // TestHeadersMatchGolden checks that Describe emits, in order, exactly the
-// seven canonical section headers held in the shared golden fixture. The
+// eight canonical section headers held in the shared golden fixture. The
 // TypeScript suite asserts the same fixture, so this pins both runtimes to
 // one diffable layout.
 func TestHeadersMatchGolden(t *testing.T) {
@@ -273,14 +274,14 @@ func TestHeadersMatchGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading golden headers fixture: %v", err)
 	}
-	golden := make([]string, 0, 7)
+	golden := make([]string, 0, 8)
 	for _, line := range strings.Split(string(data), "\n") {
 		if line != "" {
 			golden = append(golden, line)
 		}
 	}
-	if len(golden) != 7 {
-		t.Fatalf("golden fixture should hold 7 headers, got %d", len(golden))
+	if len(golden) != 8 {
+		t.Fatalf("golden fixture should hold 8 headers, got %d", len(golden))
 	}
 
 	j := tabnas.Make()
@@ -300,6 +301,86 @@ func TestHeadersMatchGolden(t *testing.T) {
 			t.Fatalf("header out of order: %q", header)
 		}
 		cursor = at
+	}
+}
+
+// buildAddGrammar installs the hand-written add grammar used to assert the
+// ABNF emitter's exact output, mirroring the worked example in the task:
+// `val` pushes `add`; `add` matches #NR then optionally a #PL-replace back
+// into `add`, with an epsilon close and the #ZZ end close. The `+` fixed
+// token is registered via options so its literal is recoverable from the
+// fixed-token table.
+func buildAddGrammar(t *testing.T) *tabnas.Tabnas {
+	t.Helper()
+	plus := "+"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#PL": &plus}},
+		Rule:  &tabnas.RuleOptions{Start: "val"},
+	})
+	zz := j.Token("#ZZ")
+	nr := j.Token("#NR")
+	pl := j.Token("#PL")
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{P: "add"})
+	})
+	j.Rule("add", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{nr}}})
+		// #PL replace continuation, an epsilon close (makes it optional),
+		// and the #ZZ end close (skipped by the emitter).
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{pl}}, R: "add"})
+		rs.AddClose(&tabnas.AltSpec{})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+	return j
+}
+
+// TestAbnfAddGrammar checks that Abnf emits the add grammar byte-for-byte
+// as the canonical TypeScript tabnas.debug.abnf() does (verified against
+// the live TS emitter): productions reference tokens by bare name, the
+// optional continuation folds into `[ PL add ]`, and each used token is
+// defined after a blank line with `=` aligned to the longest name.
+func TestAbnfAddGrammar(t *testing.T) {
+	j := buildAddGrammar(t)
+
+	out, err := debug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+
+	want := "val = add\n" +
+		"add = NR [ PL add ]\n" +
+		"\n" +
+		"NR = <number>\n" +
+		"PL = \"+\""
+	if out != want {
+		t.Errorf("Abnf output mismatch\n--- got ---\n%s\n--- want ---\n%s", out, want)
+	}
+}
+
+// TestDescribeIncludesAbnf checks that Describe appends the ABNF section
+// (header + emitted grammar) as the last section, mirroring the TS
+// describe() placement.
+func TestDescribeIncludesAbnf(t *testing.T) {
+	j := buildAddGrammar(t)
+
+	out, err := debug.Describe(j)
+	if err != nil {
+		t.Fatalf("Describe returned error: %v", err)
+	}
+	if !strings.Contains(out, "========= ABNF =========") {
+		t.Error("Describe output missing ABNF header")
+	}
+	if !strings.Contains(out, "add = NR [ PL add ]") {
+		t.Errorf("Describe ABNF section missing the emitted add rule:\n%s", out)
+	}
+	// ABNF must be the last section: nothing else follows its header.
+	abnfAt := strings.Index(out, "========= ABNF =========")
+	pluginAt := strings.Index(out, "========= PLUGIN =========")
+	if abnfAt < pluginAt {
+		t.Error("ABNF section should come after PLUGIN")
 	}
 }
 

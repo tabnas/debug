@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	tabnas "github.com/tabnas/parser/go"
@@ -174,7 +176,26 @@ func Describe(j *tabnas.Tabnas) (out string, err error) {
 		"========= PLUGIN =========",
 		describePlugins(j),
 		"",
+		"========= ABNF =========",
+		emitAbnf(j),
+		"",
 	}, "\n"), nil
+}
+
+// Abnf returns an ABNF representation of the instance's live grammar,
+// mirroring the canonical TypeScript tabnas.debug.abnf(). Unlike the
+// TypeScript form, which returns a bare string, the Go form returns
+// (string, error) to uphold the engine's no-panic guarantee: a malformed
+// grammar spec is rendered defensively and any remaining panic is
+// recovered and returned as an "internal"-code *tabnas.TabnasError with an
+// empty string. On success the error is nil.
+func Abnf(j *tabnas.Tabnas) (out string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out, err = "", internalError("Abnf", r)
+		}
+	}()
+	return emitAbnf(j), nil
 }
 
 // describeInstance reports the instance tag (empty when unset), mirroring
@@ -542,6 +563,447 @@ func describeConfig(cfg *tabnas.LexConfig) string {
 // plugins as bare functions, so individual names are not recoverable.
 func describePlugins(j *tabnas.Tabnas) string {
 	return fmt.Sprintf("  plugins: %d", len(j.Plugins()))
+}
+
+// emitAbnf renders an ABNF representation of the instance's *live*
+// grammar, mirroring the canonical TypeScript emitAbnf() in
+// ../ts/src/debug.ts. It reads ONLY the running engine (config + rule
+// specs); it never imports a bnf port (Go has none).
+//
+// tabnas rules become ABNF productions; OPEN alts become `/`-separated
+// alternatives; the token sequence (.S) plus any push/replace target
+// (.P/.R) becomes a space-separated element list; and each token resolves
+// to an ABNF terminal via the fixed-literal / match-regex config. A
+// close-alt continuation (.P/.R, ignoring the #ZZ end token) folds onto
+// the last open alt; if an epsilon close alt also exists, the continuation
+// is wrapped as `[ ... ]` (optional). The synthetic `__start__` wrapper
+// and the `#ZZ` end token are skipped; the real start rule leads.
+//
+// Each used token is then defined as its own ABNF rule (a quoted literal,
+// a char-range, or a prose-val `<...>` for built-in lexer tokens), emitted
+// after the productions with `=` aligned to the longest token name.
+func emitAbnf(j *tabnas.Tabnas) string {
+	cfg := j.Config()
+	rsm := j.RSM()
+	if cfg == nil {
+		return ""
+	}
+
+	// bnf wraps grammars in a synthetic '__start__' rule (open .P -> the
+	// real start, close matches #ZZ); skip it and lead with the real
+	// start. A hand-written grammar's RuleStart is itself a real rule, so
+	// keep it and emit it first like any other production.
+	synthWrapper := ""
+	if cfg.RuleStart == "__start__" {
+		synthWrapper = cfg.RuleStart
+	}
+	startRule := ""
+	if synthWrapper == "" {
+		startRule = cfg.RuleStart
+	} else if wrapper := rsm[synthWrapper]; wrapper != nil {
+		for _, alt := range wrapper.OpenAlts() {
+			if alt == nil {
+				continue
+			}
+			if alt.P != "" {
+				startRule = alt.P
+				break
+			}
+			if alt.R != "" {
+				startRule = alt.R
+				break
+			}
+		}
+	}
+
+	// The engine's reserved end-of-source token; never an ABNF element.
+	endTin := tabnas.TinZZ
+
+	// Invert FixedTokens (source -> tin) to tin -> source once, the same
+	// inversion describeTokens uses; this is the Go equivalent of TS
+	// cfg.fixed.ref[tin].
+	fixedSrc := make(map[tabnas.Tin]string, len(cfg.FixedTokens))
+	for src, tin := range cfg.FixedTokens {
+		fixedSrc[tin] = src
+	}
+
+	// Order productions: real start first, then every other non-wrapper
+	// rule in stable (sorted) order, de-duplicated. The TS form uses the
+	// engine's insertion order; the Go RSM is a map, so a sorted order is
+	// used for determinism (the shared add grammar emits identically
+	// because its rule names already sort as start-first by construction).
+	ruleNames := make([]string, 0, len(rsm))
+	for rn := range rsm {
+		if rn != synthWrapper {
+			ruleNames = append(ruleNames, rn)
+		}
+	}
+	sort.Strings(ruleNames)
+
+	ordered := make([]string, 0, len(ruleNames))
+	seen := make(map[string]bool)
+	if startRule != "" && rsm[startRule] != nil {
+		ordered = append(ordered, startRule)
+		seen[startRule] = true
+	}
+	for _, rn := range ruleNames {
+		if !seen[rn] {
+			ordered = append(ordered, rn)
+			seen[rn] = true
+		}
+	}
+
+	// Every token renders as its bare name in rule bodies; `used` collects
+	// each token's definition for the legend printed after the
+	// productions. usedOrder preserves first-seen order so the legend is
+	// deterministic and matches the TS Map iteration order.
+	used := make(map[string]string)
+	var usedOrder []string
+	recordUsed := func(name, form string) {
+		if _, ok := used[name]; !ok {
+			used[name] = form
+			usedOrder = append(usedOrder, name)
+		}
+	}
+
+	var lines []string
+	for _, rn := range ordered {
+		rs := rsm[rn]
+		var alts []string
+
+		if rs != nil {
+			for _, alt := range rs.OpenAlts() {
+				alts = append(alts, emitAbnfAlt(j, cfg, fixedSrc, rsm, alt, endTin, recordUsed))
+			}
+
+			closeAlts := rs.CloseAlts()
+
+			// An epsilon close alt (no .S/.P/.R, and not the #ZZ end) means
+			// the close continuation is OPTIONAL — render it as `[ cont ]`.
+			hasEpsilonClose := false
+			for _, alt := range closeAlts {
+				if alt == nil {
+					continue
+				}
+				if isEndAlt(alt, endTin) {
+					continue
+				}
+				if len(alt.S) == 0 && alt.P == "" && alt.R == "" {
+					hasEpsilonClose = true
+					break
+				}
+			}
+
+			for _, alt := range closeAlts {
+				if alt == nil || isEndAlt(alt, endTin) {
+					continue
+				}
+				// Only fold in close continuations that actually reference a
+				// rule; pure capture-actions (no .S/.P/.R) are noise.
+				if alt.P != "" || alt.R != "" {
+					cont := emitAbnfAlt(j, cfg, fixedSrc, rsm, alt, endTin, recordUsed)
+					piece := cont
+					if hasEpsilonClose {
+						piece = "[ " + cont + " ]"
+					}
+					if len(alts) > 0 {
+						alts[len(alts)-1] = strings.TrimSpace(alts[len(alts)-1] + " " + piece)
+					} else {
+						alts = append(alts, piece)
+					}
+				}
+			}
+		}
+
+		body := ""
+		if len(alts) > 0 {
+			body = strings.Join(alts, " / ")
+		}
+		lines = append(lines, rn+" = "+body)
+	}
+
+	// Define each used token as its own ABNF rule, with `=` aligned for
+	// readability (named terminals, like the ABNF core rules).
+	if len(usedOrder) > 0 {
+		pad := 0
+		for _, n := range usedOrder {
+			if len(n) > pad {
+				pad = len(n)
+			}
+		}
+		lines = append(lines, "")
+		for _, name := range usedOrder {
+			lines = append(lines, padRight(name, pad)+" = "+used[name])
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// isEndAlt reports whether a close alt is the engine's #ZZ end-of-source
+// close (its first matched position is the end token). Mirrors the TS
+// closeFirstTin === endTin check.
+func isEndAlt(alt *tabnas.AltSpec, endTin tabnas.Tin) bool {
+	if len(alt.S) != 1 {
+		return false
+	}
+	pos := alt.S[0]
+	if len(pos) == 0 {
+		return false
+	}
+	return pos[0] == endTin
+}
+
+// emitAbnfAlt renders a single alt as an ABNF element sequence: each token
+// in .S, then any .P/.R rule reference, space-separated. An alt with no
+// elements renders as the empty string (an empty alternative). Mirrors the
+// TS emitAbnfAlt().
+func emitAbnfAlt(
+	j *tabnas.Tabnas,
+	cfg *tabnas.LexConfig,
+	fixedSrc map[tabnas.Tin]string,
+	rsm map[string]*tabnas.RuleSpec,
+	alt *tabnas.AltSpec,
+	endTin tabnas.Tin,
+	recordUsed func(name, form string),
+) string {
+	if alt == nil {
+		return ""
+	}
+	var els []string
+
+	// When `B` (backup/lookahead) is set together with a push/replace, the
+	// .S tokens are a *predictive peek* — matched to choose this alt but
+	// not consumed here; the pushed rule consumes them. Emitting them as
+	// terminals would double-count the input, so skip them and let the
+	// rule reference stand alone (FIRST-set guard / optional dispatch).
+	peekOnly := alt.B != 0 && (alt.P != "" || alt.R != "")
+
+	if !peekOnly {
+		for _, pos := range alt.S {
+			// A position is a set of acceptable tins. A single tin renders
+			// bare; a multi-tin set renders as `( a / b )`. Drop the end
+			// token from any position.
+			inner := make([]string, 0, len(pos))
+			for _, tin := range pos {
+				if tin == endTin {
+					continue
+				}
+				inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed))
+			}
+			switch len(inner) {
+			case 0:
+				// Wildcard / end-only position: contributes nothing.
+			case 1:
+				els = append(els, inner[0])
+			default:
+				els = append(els, "( "+strings.Join(inner, " / ")+" )")
+			}
+		}
+	}
+
+	// A push/replace target is a forward reference to another production.
+	if alt.P != "" {
+		els = append(els, alt.P)
+	} else if alt.R != "" {
+		els = append(els, alt.R)
+	}
+
+	return strings.Join(els, " ")
+}
+
+// emitAbnfTerminal renders a token reference: every token appears by its
+// bare NAME (e.g. #PL -> PL, #NR -> NR), and its definition is recorded via
+// recordUsed for the legend. A token name that is actually a rule name is a
+// nonterminal reference and is returned as-is. Mirrors the TS
+// emitAbnfTerminal().
+func emitAbnfTerminal(
+	j *tabnas.Tabnas,
+	cfg *tabnas.LexConfig,
+	fixedSrc map[tabnas.Tin]string,
+	rsm map[string]*tabnas.RuleSpec,
+	tin tabnas.Tin,
+	recordUsed func(name, form string),
+) string {
+	fullName := j.TinName(tin)
+
+	if fullName != "" {
+		if _, ok := rsm[fullName]; ok {
+			return fullName
+		}
+	}
+
+	name := fullName
+	if name == "" {
+		name = fmt.Sprintf("T%d", tin)
+	}
+	name = strings.TrimPrefix(name, "#")
+	recordUsed(name, abnfTokenForm(cfg, fixedSrc, tin, fullName))
+	return name
+}
+
+// abnfTokenForm returns the legend definition for a token — what it
+// matches:
+//   - fixed literal       -> %s"<lit>" (letters) / "<lit>" (punctuation)
+//   - /^<lit>/i (letters) -> "<lit>"     (case-insensitive literal)
+//   - char range          -> %xLO-HI
+//   - built-in matcher     -> <number> / <string> / ...   (lexer-provided)
+//
+// Mirrors the TS abnfTokenForm().
+func abnfTokenForm(cfg *tabnas.LexConfig, fixedSrc map[tabnas.Tin]string, tin tabnas.Tin, fullName string) string {
+	if lit, ok := fixedSrc[tin]; ok {
+		if hasAsciiLetter(lit) {
+			return `%s"` + lit + `"`
+		}
+		return `"` + lit + `"`
+	}
+
+	if cfg.MatchTokens != nil {
+		if re := cfg.MatchTokens[tin]; re != nil {
+			return regexToAbnf(re)
+		}
+	}
+
+	// Built-in lexer token: describe it (it is lexer-provided, so a grammar
+	// using it does not round-trip through bnf).
+	bare := strings.TrimPrefix(fullName, "#")
+	if bare == "" {
+		bare = fmt.Sprintf("%d", tin)
+	}
+	desc := map[string]string{
+		"NR": "number",
+		"ST": "string",
+		"TX": "text",
+		"VL": "value",
+		"SP": "space",
+		"LN": "line",
+		"CM": "comment",
+		"AA": "any",
+		"UK": "unknown",
+		"BD": "bad",
+		"ZZ": "end-of-source",
+	}
+	if d, ok := desc[bare]; ok {
+		return "<" + d + ">"
+	}
+	return "<built-in " + bare + ">"
+}
+
+// regexToAbnf translates the anchored regexp the engine installs for a
+// match token back to ABNF, covering the shapes that map cleanly. Mirrors
+// the TS regexToAbnf(), adapted to Go's regexp syntax: Go has no RegExp
+// flags field, so case-insensitivity is read from a leading (?i) group
+// rather than a `flags` property.
+func regexToAbnf(re *regexp.Regexp) string {
+	src := re.String()
+
+	// Go encodes case-insensitivity as a leading (?i) flag group. Detect
+	// and strip it so the literal shape below can match.
+	caseInsensitive := false
+	if strings.HasPrefix(src, "(?i)") {
+		caseInsensitive = true
+		src = src[len("(?i)"):]
+	}
+
+	// Drop a leading anchor.
+	if strings.HasPrefix(src, "^") {
+		src = src[1:]
+	}
+
+	// Single char-class range: [\x{XXXX}-\x{YYYY}] or [\uXXXX-\uYYYY] ->
+	// %xLO-HI.
+	if lo, hi, ok := matchCharRange(src); ok {
+		return "%x" + lo + "-" + hi
+	}
+
+	// Case-insensitive literal: recover the literal by unescaping the
+	// regex metacharacters, then verify the round-trip so a genuine regex
+	// is never misread as a literal.
+	if caseInsensitive {
+		lit := unescapeRegexLiteral(src)
+		reEncoded := "(?i)^" + escapeRegExpLike(lit)
+		if reEncoded == re.String() && isAbnfQuotable(lit) {
+			return `"` + lit + `"`
+		}
+	}
+
+	// Anything else: keep it visible but mark it as non-round-tripping.
+	return "; /" + re.String() + "/"
+}
+
+// charRangeRe matches a single char-class range in the two escape forms a
+// regex source may use: [\uXXXX-\uYYYY] and Go's [\x{XXXX}-\x{YYYY}], plus
+// the bare two-digit hex form [\xXX-\xYY].
+var (
+	charRangeU   = regexp.MustCompile(`^\[\\u([0-9A-Fa-f]{4})-\\u([0-9A-Fa-f]{4})\]$`)
+	charRangeX4  = regexp.MustCompile(`^\[\\x\{([0-9A-Fa-f]+)\}-\\x\{([0-9A-Fa-f]+)\}\]$`)
+	charRangeX2  = regexp.MustCompile(`^\[\\x([0-9A-Fa-f]{2})-\\x([0-9A-Fa-f]{2})\]$`)
+	metaEscapeRe = regexp.MustCompile(`\\([\\^$.*+?()\[\]{}|/])`)
+	abnfMetaRe   = regexp.MustCompile(`[\\^$.*+?()\[\]{}|]`)
+)
+
+// matchCharRange extracts the lo/hi bounds of a single char-class range and
+// returns them as uppercase hex (leading zeros stripped, mirroring the TS
+// parseInt(...).toString(16).toUpperCase()), or ok=false if src is not such
+// a range.
+func matchCharRange(src string) (lo, hi string, ok bool) {
+	for _, re := range []*regexp.Regexp{charRangeU, charRangeX4, charRangeX2} {
+		if m := re.FindStringSubmatch(src); m != nil {
+			return hexNormalize(m[1]), hexNormalize(m[2]), true
+		}
+	}
+	return "", "", false
+}
+
+// hexNormalize parses a hex string and re-renders it as uppercase hex with
+// no leading zeros, e.g. "0030" -> "30". Mirrors the TS
+// parseInt(h,16).toString(16).toUpperCase().
+func hexNormalize(h string) string {
+	n, err := strconv.ParseInt(h, 16, 64)
+	if err != nil {
+		return strings.ToUpper(h)
+	}
+	return strings.ToUpper(strconv.FormatInt(n, 16))
+}
+
+// unescapeRegexLiteral reverses the metacharacter escaping the engine
+// applies when encoding a bare ABNF literal as a regex.
+func unescapeRegexLiteral(src string) string {
+	return metaEscapeRe.ReplaceAllString(src, "$1")
+}
+
+// escapeRegExpLike mirrors the engine's escapeRegExp, used only to validate
+// that an unescaped candidate literal re-escapes to the observed source.
+func escapeRegExpLike(s string) string {
+	return abnfMetaRe.ReplaceAllString(s, `\$0`)
+}
+
+// isAbnfQuotable reports whether s fits in an ABNF char-val (quoted
+// string): printable ASCII except the double quote.
+func isAbnfQuotable(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range []byte(s) {
+		if c == 0x22 {
+			return false
+		}
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// hasAsciiLetter reports whether s contains an ASCII letter (A-Z or a-z),
+// the test the TS form uses to choose %s"..." over "...".
+func hasAsciiLetter(s string) bool {
+	for _, c := range []byte(s) {
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			return true
+		}
+	}
+	return false
 }
 
 // sortedRuleNames returns the rule names of a spec map in stable order.

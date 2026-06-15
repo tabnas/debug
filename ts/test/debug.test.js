@@ -70,6 +70,7 @@ describe('debug', () => {
       '========= LEXER =========',
       '========= CONFIG ========',
       '========= PLUGIN =========',
+      '========= ABNF =========',
     ]) {
       assert.ok(out.includes(header), 'describe() missing section ' + header)
     }
@@ -83,7 +84,7 @@ describe('debug', () => {
     assert.ok(out.includes('  start: '), 'describe() should report the rule start')
   })
 
-  // The seven section headers describe() emits must match, in order, the
+  // The eight section headers describe() emits must match, in order, the
   // shared golden fixture the Go suite also reads. This locks the two
   // runtimes to the same diffable layout.
   it('emits exactly the shared golden section headers, in order', () => {
@@ -91,7 +92,7 @@ describe('debug', () => {
       .readFileSync(HEADERS_GOLDEN, 'utf8')
       .split('\n')
       .filter((line) => line.length > 0)
-    assert.equal(golden.length, 7, 'golden fixture should hold 7 headers')
+    assert.equal(golden.length, 8, 'golden fixture should hold 8 headers')
 
     const tn = new Tabnas()
     tn.use(Debug, { print: false, trace: false })
