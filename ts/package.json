@@ -33,11 +33,11 @@
     ".": "./dist/debug.js"
   },
   "peerDependencies": {
-    "@tabnas/parser": "*"
+    "@tabnas/parser": ">=2"
   },
   "devDependencies": {
     "@types/node": "25.6.0",
-    "@tabnas/parser": "file:../vendor/tabnas-parser/ts",
+    "@tabnas/parser": "file:../../parser/ts",
     "typescript": "6.0.3"
   }
 }
