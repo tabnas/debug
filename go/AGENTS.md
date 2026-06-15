@@ -27,7 +27,7 @@ idioms, not a literal translation:
   (`lex`, `rule`). There is no per-kind selection or `print` option.
 - Introspection for `Describe` reads exported accessors: `j.Config()`
   (`LexConfig`: `TinNames`, `FixedTokens`, `CustomMatchers`, lex flags),
-  `j.RSM()` (rule specs and their `Open`/`Close` `[]*AltSpec`),
+  `j.RSM()` (rule specs and their `OpenAlts()`/`CloseAlts()` `[]*AltSpec`),
   `j.Plugins()`, `j.TinName(tin)`.
 
 Keep the `describe` section headers identical to TS. When TS gains or

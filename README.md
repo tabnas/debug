@@ -1,6 +1,6 @@
 # @tabnas/debug
 
-Debug plugin for the [tabnas](https://github.com/rjrodger/tabnas)
+Debug plugin for the [tabnas](https://github.com/tabnas/parser)
 parser — tracing hooks and a `describe()` method for `Tabnas` instances.
 
 This repository contains two implementations of the same plugin:
@@ -8,7 +8,7 @@ This repository contains two implementations of the same plugin:
 | Path | Description |
 |---|---|
 | [`ts/`](ts/) | TypeScript / JavaScript implementation (`@tabnas/debug`). **Canonical.** |
-| [`go/`](go/) | Go implementation (`github.com/rjrodger/tabnas-debug/go`). Kept at parity with `ts/`. |
+| [`go/`](go/) | Go implementation (`github.com/tabnas/debug/go`). Kept at parity with `ts/`. |
 
 The TypeScript implementation is the source of truth; the Go port mirrors
 its behaviour, options, defaults and output format.

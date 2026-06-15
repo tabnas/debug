@@ -1,6 +1,6 @@
 # @tabnas/debug documentation
 
-Debug plugin for the [`tabnas`](https://github.com/rjrodger/tabnas)
+Debug plugin for the [`tabnas`](https://github.com/tabnas/parser)
 parser. It adds a grammar `describe()` method and optional parse tracing
 to a parser instance.
 

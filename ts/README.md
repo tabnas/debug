@@ -1,6 +1,6 @@
 # @tabnas/debug
 
-Debug plugin for the [`tabnas`](https://github.com/rjrodger/tabnas) parser.
+Debug plugin for the [`tabnas`](https://github.com/tabnas/parser) parser.
 
 Adds tracing helpers and a `describe()` method to a `Tabnas` instance.
 

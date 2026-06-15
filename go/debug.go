@@ -4,19 +4,21 @@
 //
 // It mirrors the canonical TypeScript implementation in ../ts: a Debug
 // plugin that traces a parse, and a Describe function that dumps a
-// parser instance's active grammar (tokens, rules, alternates, lexer
-// matchers and plugins). The TypeScript version is authoritative.
+// parser instance's active grammar (tokens, token sets, rules, alternates,
+// lexer matchers and plugins). The TypeScript version is authoritative.
 //
 // The Go tabnas engine exposes tracing through instance subscribers
 // (Tabnas.Sub) rather than the TypeScript context-log hook, and its
 // introspection is read through exported accessors (Config, RSM,
-// TinName, Plugins). The output here therefore tracks the TypeScript
-// behaviour as closely as the Go engine API allows; see
+// TinName, TokenSet, Plugins). The output here therefore tracks the
+// TypeScript behaviour as closely as the Go engine API allows; see
 // ../docs/reference.md for the documented differences.
 package debug
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -45,13 +47,49 @@ func internalError(api string, r any) error {
 	}
 }
 
+// traceEnabled reports whether tracing should be installed for the given
+// options. It mirrors the canonical TypeScript handling of the `trace`
+// option, which accepts true | false | object:
+//
+//   - opts nil, or no "trace" key: fall back to Defaults["trace"].
+//   - an explicit false (bool or *bool): off.
+//   - any other non-nil value (true, a per-kind flag map/object): on.
+//
+// The Go engine surfaces only two event streams (token and rule), so a
+// per-kind object cannot select kinds the way TypeScript does; any
+// non-false trace value simply enables both streams.
+func traceEnabled(opts map[string]any) bool {
+	v, ok := opts["trace"]
+	if !ok {
+		// Honour the package default when the option is absent.
+		v, ok = Defaults["trace"]
+		if !ok {
+			return false
+		}
+	}
+	switch t := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return t
+	case *bool:
+		return t != nil && *t
+	default:
+		// A non-false, non-nil value (e.g. a per-kind flag map) means "on".
+		return true
+	}
+}
+
 // Debug is the tabnas plugin entry point. Load it with
 //
 //	j.Use(debug.Debug, map[string]any{"trace": true})
 //
-// and call debug.Describe(j) for a grammar dump. When opts["trace"] is
-// true the plugin installs lex and rule subscribers that log each parse
-// event.
+// and call debug.Describe(j) for a grammar dump. When tracing is enabled
+// (see traceEnabled) the plugin installs lex and rule subscribers that
+// log each parse event.
+//
+// Trace output goes to os.Stdout by default; pass an io.Writer under
+// opts["out"] to capture it (e.g. for tests).
 //
 // Loading via j.Use already runs under the engine's no-panic guard, but
 // Debug guards itself too so that calling it directly cannot panic the
@@ -64,24 +102,28 @@ var Debug tabnas.Plugin = func(j *tabnas.Tabnas, opts map[string]any) (err error
 		}
 	}()
 
-	if trace, ok := opts["trace"].(bool); ok && trace {
-		addTrace(j)
+	if traceEnabled(opts) {
+		var out io.Writer = os.Stdout
+		if w, ok := opts["out"].(io.Writer); ok && w != nil {
+			out = w
+		}
+		addTrace(j, out)
 	}
 	return nil
 }
 
-// addTrace installs the lex and rule subscribers that emit trace lines.
-// The Go engine surfaces two event streams (token and rule); the
-// TypeScript plugin's finer kinds (parse, node, stack) are not exposed
-// by the Go engine and are intentionally omitted here.
-func addTrace(j *tabnas.Tabnas) {
+// addTrace installs the lex and rule subscribers that emit trace lines to
+// out. The Go engine surfaces two event streams (token and rule); the
+// canonical TypeScript plugin's finer kinds (step, parse, node, stack)
+// have no Go engine equivalent and are not emitted here.
+func addTrace(j *tabnas.Tabnas, out io.Writer) {
 	j.Sub(
 		func(tkn *tabnas.Token, rule *tabnas.Rule, ctx *tabnas.Context) {
-			fmt.Printf("[lex]  %-6s tin=%d src=%q val=%v at %d:%d\n",
+			fmt.Fprintf(out, "[lex]  %-6s tin=%d src=%q val=%v at %d:%d\n",
 				tkn.Name, tkn.Tin, tkn.Src, tkn.Val, tkn.RI, tkn.CI)
 		},
 		func(rule *tabnas.Rule, ctx *tabnas.Context) {
-			fmt.Printf("[rule] %s~%d:%s d=%d node=%v\n",
+			fmt.Fprintf(out, "[rule] %s~%d:%s d=%d node=%v\n",
 				rule.Name, rule.I, rule.State, rule.D, ctx.F(rule.Node))
 		},
 	)
@@ -89,8 +131,8 @@ func addTrace(j *tabnas.Tabnas) {
 
 // Describe returns a human-readable description of a parser instance's
 // active configuration, mirroring the sections of the canonical
-// TypeScript describe(): tokens, rules, alternates, lexer matchers and
-// plugins.
+// TypeScript describe(): tokens, token sets, rules, alternates, lexer
+// matchers and plugins.
 //
 // Unlike the TypeScript describe(), which returns a bare string, the Go
 // form returns (string, error): it upholds the engine's no-panic
@@ -114,6 +156,8 @@ func Describe(j *tabnas.Tabnas) (out string, err error) {
 		"",
 		"========= TOKENS ========",
 		describeTokens(j, cfg),
+		"",
+		describeTokenSets(j),
 		"",
 		"========= RULES =========",
 		describeRules(j),
@@ -140,60 +184,156 @@ func describeInstance(j *tabnas.Tabnas) string {
 }
 
 // describeTokens lists every named token with its tin and, for fixed
-// tokens, the source text it matches.
+// tokens, the source text it matches. It iterates (tin, name) pairs
+// directly: the built-in tins in their canonical order, then any custom
+// tins registered via j.Token (cfg.TinNames). There is no reverse scan
+// and no one-to-one TinNames assumption.
 func describeTokens(j *tabnas.Tabnas, cfg *tabnas.LexConfig) string {
 	if cfg == nil {
 		return ""
 	}
 
-	// Invert FixedTokens (source -> tin) to tin -> source.
+	// Invert FixedTokens (source -> tin) to tin -> source, once.
 	fixedSrc := make(map[tabnas.Tin]string, len(cfg.FixedTokens))
 	for src, tin := range cfg.FixedTokens {
 		fixedSrc[tin] = src
 	}
 
-	names := make([]string, 0, len(cfg.TinNames))
-	for tin := range cfg.TinNames {
-		names = append(names, cfg.TinNames[tin])
-	}
-	sort.Strings(names)
-
-	lines := make([]string, 0, len(names))
-	for _, name := range names {
-		// Resolve the tin for this name to look up any fixed source.
-		var tin tabnas.Tin
-		for t, n := range cfg.TinNames {
-			if n == name {
-				tin = t
-				break
-			}
-		}
+	render := func(tin tabnas.Tin, name string) string {
 		fixed := ""
 		if src, ok := fixedSrc[tin]; ok && src != "" {
 			fixed = `"` + src + `"`
 		}
-		lines = append(lines, fmt.Sprintf("  %s\t%d\t%s", name, tin, fixed))
+		return fmt.Sprintf("  %s\t%d\t%s", name, tin, fixed)
+	}
+
+	lines := make([]string, 0, int(tabnas.TinMAX))
+	// Built-in tokens, in canonical tin order (TinBD..TinCA).
+	for tin := tabnas.TinBD; tin < tabnas.TinMAX; tin++ {
+		lines = append(lines, render(tin, j.TinName(tin)))
+	}
+
+	// Custom tokens registered via j.Token, keyed by tin in cfg.TinNames.
+	// Iterate the (tin, name) pairs directly, in tin order for determinism.
+	custom := make([]tabnas.Tin, 0, len(cfg.TinNames))
+	for tin := range cfg.TinNames {
+		if tin >= tabnas.TinMAX {
+			custom = append(custom, tin)
+		}
+	}
+	sort.Ints(custom)
+	for _, tin := range custom {
+		lines = append(lines, render(tin, cfg.TinNames[tin]))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// describeTokenSets lists the named token sets (IGNORE, VAL, KEY, plus any
+// custom set the engine exposes) and their member token names, mirroring
+// the canonical TypeScript describe()'s tokenSet sub-block (debug.ts
+// describe() lines ~88-97). Member tins are resolved to names and ordered
+// deterministically (see ../docs/reference.md on ordering).
+func describeTokenSets(j *tabnas.Tabnas) string {
+	lines := make([]string, 0, 3)
+	for _, name := range []string{"IGNORE", "VAL", "KEY"} {
+		tins := j.TokenSet(name)
+		if tins == nil {
+			continue
+		}
+		// IGNORE is backed by a Go map (unordered); sort all sets by tin so
+		// the output is deterministic regardless of engine storage.
+		sorted := make([]tabnas.Tin, len(tins))
+		copy(sorted, tins)
+		sort.Ints(sorted)
+		members := make([]string, 0, len(sorted))
+		for _, tin := range sorted {
+			members = append(members, j.TinName(tin))
+		}
+		lines = append(lines, "    "+name+"\t"+strings.Join(members, ","))
 	}
 	return strings.Join(lines, "\n")
 }
 
-// describeRules lists each rule with the alternate counts for its open
-// and close phases.
+// describeRules renders, for each rule, its open/close push/replace
+// transition tree: the distinct rule-name targets reached by an open-push
+// (op), open-replace (or), close-push (cp) and close-replace (cr)
+// alternate. Empty categories are omitted; a single-character rule name is
+// a valid target and is not dropped. Mirrors ruleTree()/ruleTreeStep() in
+// debug.ts.
 func describeRules(j *tabnas.Tabnas) string {
 	rsm := j.RSM()
 	names := sortedRuleNames(rsm)
 
-	lines := make([]string, 0, len(names))
+	var b strings.Builder
 	for _, name := range names {
 		rs := rsm[name]
-		if rs == nil {
-			lines = append(lines, fmt.Sprintf("  %s:\topen=0 close=0", name))
+		b.WriteString("  " + name + ":\n    ")
+		cats := []struct {
+			label, data string
+		}{
+			{"op", ruleTreeStep(rs, "open", "p")},
+			{"or", ruleTreeStep(rs, "open", "r")},
+			{"cp", ruleTreeStep(rs, "close", "p")},
+			{"cr", ruleTreeStep(rs, "close", "r")},
+		}
+		parts := make([]string, 0, len(cats))
+		for _, c := range cats {
+			// Drop only truly-empty categories; len > 0 keeps single-character
+			// rule-name targets (matching the corrected TS off-by-one).
+			if len(c.data) > 0 {
+				parts = append(parts, c.label+": "+c.data)
+			}
+		}
+		b.WriteString(strings.Join(parts, "\n    "))
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// ruleTreeStep collects the distinct rule-name targets of one phase/step:
+// the static (P / R) or dynamic (PF / RF) push/replace target of each
+// alternate in the named phase. Function-valued targets render as "<F>".
+// Mirrors ruleTreeStep() in debug.ts.
+func ruleTreeStep(rs *tabnas.RuleSpec, phase, step string) string {
+	if rs == nil {
+		return ""
+	}
+	var alts []*tabnas.AltSpec
+	if phase == "open" {
+		alts = rs.OpenAlts()
+	} else {
+		alts = rs.CloseAlts()
+	}
+
+	seen := make(map[string]bool)
+	var targets []string
+	for _, a := range alts {
+		if a == nil {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("  %s:\topen=%d close=%d",
-			name, len(rs.OpenAlts()), len(rs.CloseAlts())))
+		var name string
+		switch step {
+		case "p":
+			if a.P != "" {
+				name = a.P
+			} else if a.PF != nil {
+				name = "<F>"
+			}
+		case "r":
+			if a.R != "" {
+				name = a.R
+			} else if a.RF != nil {
+				name = "<F>"
+			}
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		targets = append(targets, name)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(targets, " ")
 }
 
 // describeAlts renders every open and close alternate of every rule,
@@ -235,9 +375,10 @@ func descAltPhase(j *tabnas.Tabnas, phase string, alts []*tabnas.AltSpec) string
 	return b.String()
 }
 
-// altSeq renders an alternate's token-sequence matcher. Each position
-// may accept several tins; alternatives within a position are joined
-// with "|".
+// altSeq renders an alternate's token-sequence matcher. Each position may
+// accept several tins: a single tin renders bare, a multi-token set
+// renders as "[" + comma-join + "]". Mirrors descAlt/descAltSeq in
+// debug.ts.
 func altSeq(j *tabnas.Tabnas, seq [][]tabnas.Tin) string {
 	positions := make([]string, 0, len(seq))
 	for _, posTins := range seq {
@@ -245,40 +386,115 @@ func altSeq(j *tabnas.Tabnas, seq [][]tabnas.Tin) string {
 		for _, tin := range posTins {
 			names = append(names, j.TinName(tin))
 		}
-		positions = append(positions, strings.Join(names, "|"))
+		switch len(names) {
+		case 0:
+			// Wildcard position (no tin constraint).
+			positions = append(positions, "")
+		case 1:
+			positions = append(positions, names[0])
+		default:
+			positions = append(positions, "["+strings.Join(names, ",")+"]")
+		}
 	}
 	return "[" + strings.Join(positions, " ") + "]"
 }
 
-// altActions renders the push/replace/back/counter/group fields of an
-// alternate.
+// altActions renders the action/condition fields of an alternate:
+//   - push (p) and replace (r), including function-valued targets ("<F>"),
+//   - backtrack (b), counters (n), group (g),
+//   - the action / condition / modifier presence flags (A / C / H),
+//   - the declarative condition (CD).
+//
+// Mirrors descAlt() in debug.ts. The TS condition counter map (a.c.n,
+// rendered there as CN=) has no Go AltSpec field — the engine folds
+// counter conditions into the C function rather than retaining a separate
+// map — so CN is not emitted; see ../docs/reference.md.
 func altActions(a *tabnas.AltSpec) string {
 	var parts []string
+
+	// Push: static P, else function-valued PF as "<F>".
 	if a.P != "" {
 		parts = append(parts, "p="+a.P)
+	} else if a.PF != nil {
+		parts = append(parts, "p=<F>")
 	}
+	// Replace: static R, else function-valued RF as "<F>".
 	if a.R != "" {
 		parts = append(parts, "r="+a.R)
+	} else if a.RF != nil {
+		parts = append(parts, "r=<F>")
 	}
+
 	if a.B != 0 {
 		parts = append(parts, fmt.Sprintf("b=%d", a.B))
 	}
+
 	if len(a.N) > 0 {
-		keys := make([]string, 0, len(a.N))
-		for k := range a.N {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		pairs := make([]string, 0, len(keys))
-		for _, k := range keys {
-			pairs = append(pairs, fmt.Sprintf("%s:%d", k, a.N[k]))
-		}
-		parts = append(parts, "n="+strings.Join(pairs, ","))
+		parts = append(parts, "n="+joinIntMap(a.N))
 	}
+
 	if a.G != "" {
 		parts = append(parts, "g="+a.G)
 	}
+
+	// Presence flags: action (A), condition (C), modifier (H).
+	flags := ""
+	if a.A != nil {
+		flags += "A"
+	}
+	if a.C != nil {
+		flags += "C"
+	}
+	if a.H != nil {
+		flags += "H"
+	}
+	if flags != "" {
+		parts = append(parts, flags)
+	}
+
+	// Declarative condition (CD). Render its comparison entries.
+	if len(a.CD) > 0 {
+		parts = append(parts, "CD="+joinCondMap(a.CD))
+	}
+
 	return strings.Join(parts, " ")
+}
+
+// joinIntMap renders a string→int map as "k:v,k:v" with keys sorted.
+func joinIntMap(m map[string]int) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s:%d", k, m[k]))
+	}
+	return strings.Join(pairs, ",")
+}
+
+// joinCondMap renders a declarative condition map (AltSpec.CD) as
+// "k:v,k:v" with keys sorted. A value may be a bare int (an $eq shorthand)
+// or a tabnas.CondOp (operator + value); both are rendered.
+func joinCondMap(m map[string]any) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		switch v := m[k].(type) {
+		case tabnas.CondOp:
+			pairs = append(pairs, fmt.Sprintf("%s:%s%d", k, v.Op, v.Val))
+		case int:
+			pairs = append(pairs, fmt.Sprintf("%s:%d", k, v))
+		default:
+			pairs = append(pairs, fmt.Sprintf("%s:%v", k, v))
+		}
+	}
+	return strings.Join(pairs, ",")
 }
 
 // describeLexer lists the custom lexer matchers in priority order. The

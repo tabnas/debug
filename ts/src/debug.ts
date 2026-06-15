@@ -164,17 +164,31 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
     },
   }
 
-  const origUse = tabnas.use.bind(tabnas)
+  // Wrap use() once per instance so repeated application or child forks
+  // (the engine re-runs parent plugins on make()) do not re-stack the wrapper.
+  if (!(tabnas as any).__debugUseWrapped) {
+    ;(tabnas as any).__debugUseWrapped = true
+    const origUse = tabnas.use.bind(tabnas)
 
-  tabnas.use = (...args) => {
-    let self = origUse(...args)
-    if (options.print) {
-      self
-        .internal()
-        .config.debug.get_console()
-        .log('USE:', args[0].name, '\n\n', self.debug.describe())
+    tabnas.use = (...args) => {
+      let self = origUse(...args)
+      if (options.print) {
+        // use() may return a wrapper instance; describe() whichever carries it.
+        const inst: any = self && (self as any).debug ? self : tabnas
+        if (inst.debug && inst.debug.describe) {
+          tabnas
+            .internal()
+            .config.debug.get_console()
+            .log(
+              'USE:',
+              (args[0] && args[0].name) || '',
+              '\n\n',
+              inst.debug.describe(),
+            )
+        }
+      }
+      return self
     }
-    return self
   }
 
 
@@ -183,13 +197,15 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
       parse: {
         prepare: {
           debug: (_tabnas: Tabnas, ctx: Context, _meta: any) => {
-            const console_log = ctx.cfg.debug.get_console().log
-            console_log('\n========= TRACE ==========')
+            // Call through the console provider each time so a user-supplied
+            // get_console() whose log() depends on `this` is not detached.
+            const con = ctx.cfg.debug.get_console()
+            con.log('\n========= TRACE ==========')
             ctx.log =
               ctx.log ||
               ((kind: string, ...rest: any) => {
                 if (LOGKIND[kind] && options.trace[kind]) {
-                  console_log(
+                  con.log(
                     LOGKIND[kind](...rest)
                       .filter((item: any) => 'object' != typeof item)
                       .map((item: any) =>
@@ -254,7 +270,8 @@ function descAlt(tabnas: Tabnas, rs: RuleSpec, kind: 'open' | 'close') {
             : ' CN=' +
             entries(a.c.n).map(([k, v]: [string, any]) => k + ':' + v)) +
           (null == a.c?.d ? '' : ' CD=' + a.c.d) +
-          (a.g ? '\tg=' + a.g : ''),
+          // a.g is normalised by the engine to a (possibly empty) string[].
+          (a.g && a.g.length ? '\tg=' + a.g.join(',') : ''),
       )
       .join('\n') +
     '\n'
@@ -277,8 +294,10 @@ function ruleTree(tabnas: Tabnas, rn: string[], rsm: any) {
               cp: ruleTreeStep(rsm, n, 'close', 'p'),
               cr: ruleTreeStep(rsm, n, 'close', 'r'),
             },
+            // Drop only truly-empty categories (ruleTreeStep returns '' for
+            // those); 0 < length keeps single-character rule-name targets.
             ([n, d]: [string, string]) => [
-              1 < d.length ? n : undefined,
+              0 < d.length ? n : undefined,
               n + ': ' + d,
             ],
           ),
@@ -473,7 +492,7 @@ const LOGKIND: any = {
 
       match && alt ? descAltSeq(alt, ctx.cfg) : '',
 
-      match && out.g ? 'g:' + out.g + ' ' : '',
+      match && out.g && out.g.length ? 'g:' + out.g.join(',') + ' ' : '',
       (match && out.p ? 'p:' + out.p + ' ' : '') +
       (match && out.r ? 'r:' + out.r + ' ' : '') +
       (match && out.b ? 'b:' + out.b + ' ' : ''),
@@ -516,7 +535,7 @@ const LOGKIND: any = {
         ? 'on:alt=' +
         altI +
         ';' +
-        alt.g +
+        (alt.g || []).join(',') +
         ';t=' +
         tI +
         ';' +

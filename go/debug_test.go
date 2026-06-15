@@ -3,6 +3,9 @@
 package debug_test
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +13,37 @@ import (
 
 	debug "github.com/tabnas/debug/go"
 )
+
+// headersGolden is the shared cross-runtime fixture of the seven canonical
+// section headers; the TypeScript suite reads the same file. Keeping both
+// suites pinned to it enforces the diffability claim.
+const headersGolden = "../test/headers.golden"
+
+// buildTreeGrammar installs a small non-trivial grammar on a fresh
+// instance: a `top` rule that open-pushes to a single-character rule name
+// `x` (carrying a group tag), with `x` matching a second token. It mirrors
+// the makeTreeGrammar helper in ../ts/test/debug.test.js so the two suites
+// assert the same describe() bodies and trace content.
+func buildTreeGrammar(t *testing.T) *tabnas.Tabnas {
+	t.Helper()
+	j := tabnas.Make()
+	ta := j.Token("Ta", "a")
+	tx := j.Token("Tx", "x")
+	zz := j.Token("#ZZ", "")
+
+	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{ta}}, P: "x", G: "topgrp"})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+	j.Rule("x", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{tx}}})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+	j.SetOptions(tabnas.Options{Rule: &tabnas.RuleOptions{Start: "top"}})
+	return j
+}
 
 // TestLoads checks that the plugin value is present, mirroring the
 // "loads" case in ../ts/test/debug.test.js.
@@ -136,4 +170,153 @@ func TestDescribeErrorIsInternal(t *testing.T) {
 	if te.Code != "internal" {
 		t.Errorf("Describe(nil) error code = %q, want internal", te.Code)
 	}
+}
+
+// TestTraceContentCaptured checks that, with a grammar loaded, enabling
+// tracing and capturing output via opts["out"] yields lex and rule trace
+// lines for the parse. This exercises the capturable output writer added
+// to the Go Debug plugin, the Go counterpart to the TypeScript trace
+// content test (which injects a console via get_console).
+func TestTraceContentCaptured(t *testing.T) {
+	var buf bytes.Buffer
+	j := buildTreeGrammar(t)
+	if err := j.Use(debug.Debug, map[string]any{"trace": true, "out": &buf}); err != nil {
+		t.Fatalf("Use with trace+out returned error: %v", err)
+	}
+
+	// `ax` drives top -> push x -> close, producing both event streams.
+	if _, err := j.Parse("ax"); err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	out := buf.String()
+	if out == "" {
+		t.Fatal("trace produced no captured output")
+	}
+	if !strings.Contains(out, "[rule]") {
+		t.Errorf("captured trace missing rule lines:\n%s", out)
+	}
+	if !strings.Contains(out, "[lex]") {
+		t.Errorf("captured trace missing lex lines:\n%s", out)
+	}
+	// The rule subscriber should name the rules that ran, including the
+	// pushed single-character rule x.
+	if !strings.Contains(out, "top~") {
+		t.Errorf("captured trace missing the top rule:\n%s", out)
+	}
+	if !strings.Contains(out, "x~") {
+		t.Errorf("captured trace missing the pushed rule x:\n%s", out)
+	}
+}
+
+// TestTraceDefaultOutDoesNotCrash checks that enabling tracing without an
+// out writer (so it defaults to os.Stdout) parses cleanly. Output goes to
+// stdout; we only assert the no-error, no-panic path here.
+func TestTraceDefaultOutDoesNotCrash(t *testing.T) {
+	j := buildTreeGrammar(t)
+	if err := j.Use(debug.Debug, map[string]any{"trace": true}); err != nil {
+		t.Fatalf("Use with trace returned error: %v", err)
+	}
+	if _, err := j.Parse("ax"); err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+}
+
+// TestDescribeBodies checks the populated TOKENS / ALTS / RULES bodies of
+// Describe for a non-trivial grammar, asserting parity with the
+// expectations in ../ts/test/debug.test.js's "describe() bodies" suite:
+//   - custom tokens (Ta, Tx) and their fixed sources appear in TOKENS,
+//   - the ALTS section shows the token sequence and push/group actions,
+//   - the RULES transition tree keeps the single-character push edge
+//     op: x (the off-by-one regression).
+func TestDescribeBodies(t *testing.T) {
+	j := buildTreeGrammar(t)
+
+	out, err := debug.Describe(j)
+	if err != nil {
+		t.Fatalf("Describe returned error: %v", err)
+	}
+
+	// TOKENS: custom tokens and their fixed source text.
+	tokens := section(out, "========= TOKENS ========", "========= RULES =========")
+	if !strings.Contains(tokens, "Ta") {
+		t.Errorf("TOKENS missing custom token Ta:\n%s", tokens)
+	}
+	if !strings.Contains(tokens, "Tx") {
+		t.Errorf("TOKENS missing custom token Tx:\n%s", tokens)
+	}
+	if !strings.Contains(tokens, `"a"`) {
+		t.Errorf("TOKENS missing fixed source \"a\":\n%s", tokens)
+	}
+
+	// RULES: the single-character push edge must survive.
+	rules := section(out, "========= RULES =========", "========= ALTS =========")
+	if !strings.Contains(rules, "op: x") {
+		t.Errorf("RULES tree missing single-char push edge op: x:\n%s", rules)
+	}
+
+	// ALTS: token sequence and push/group actions.
+	alts := section(out, "========= ALTS =========", "========= LEXER =========")
+	for _, want := range []string{"top:", "OPEN:", "CLOSE:", "[Ta]", "p=x", "g=topgrp"} {
+		if !strings.Contains(alts, want) {
+			t.Errorf("ALTS missing %q:\n%s", want, alts)
+		}
+	}
+}
+
+// TestHeadersMatchGolden checks that Describe emits, in order, exactly the
+// seven canonical section headers held in the shared golden fixture. The
+// TypeScript suite asserts the same fixture, so this pins both runtimes to
+// one diffable layout.
+func TestHeadersMatchGolden(t *testing.T) {
+	data, err := os.ReadFile(filepath.Clean(headersGolden))
+	if err != nil {
+		t.Fatalf("reading golden headers fixture: %v", err)
+	}
+	golden := make([]string, 0, 7)
+	for _, line := range strings.Split(string(data), "\n") {
+		if line != "" {
+			golden = append(golden, line)
+		}
+	}
+	if len(golden) != 7 {
+		t.Fatalf("golden fixture should hold 7 headers, got %d", len(golden))
+	}
+
+	j := tabnas.Make()
+	out, err := debug.Describe(j)
+	if err != nil {
+		t.Fatalf("Describe returned error: %v", err)
+	}
+
+	cursor := -1
+	for _, header := range golden {
+		at := strings.Index(out[cursor+1:], header)
+		if at < 0 {
+			t.Fatalf("Describe output missing header %q", header)
+		}
+		at += cursor + 1
+		if at <= cursor {
+			t.Fatalf("header out of order: %q", header)
+		}
+		cursor = at
+	}
+}
+
+// section returns the substring of out between the start header and the
+// end header (exclusive of end). If end is empty, it returns the tail from
+// start onward.
+func section(out, start, end string) string {
+	si := strings.Index(out, start)
+	if si < 0 {
+		return ""
+	}
+	if end == "" {
+		return out[si:]
+	}
+	ei := strings.Index(out, end)
+	if ei < 0 || ei < si {
+		return out[si:]
+	}
+	return out[si:ei]
 }
