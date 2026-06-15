@@ -17,9 +17,9 @@ import type {
   Point,
   LexMatcher,
   Token,
-} from 'tabnas'
+} from '@tabnas/parser'
 
-import { S, util, EMPTY } from 'tabnas'
+import { S, util, EMPTY } from '@tabnas/parser'
 
 
 // TODO: custom stringify for nodes

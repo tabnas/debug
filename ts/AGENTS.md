@@ -7,7 +7,7 @@ tracks it. See [../AGENTS.md](../AGENTS.md) for the parity rules.
 - Source: `src/debug.ts`. Output format, option names (`DebugOptions`),
   `DEFAULTS`, and the `describe()` section order all originate here.
 - Tests: `test/debug.test.js` (Node's built-in test runner).
-- The engine dependency `tabnas` is referenced as
+- The engine dependency `@tabnas/parser` is referenced as
   `file:../vendor/tabnas-parser/ts` and must be fetched first with
   `../scripts/fetch-parser.sh` (the root Makefile does this).
 

@@ -11,7 +11,7 @@ specific input.
 2. Load the plugin with tracing on and printing off:
 
    ```js
-   const { Tabnas } = require('tabnas')
+   const { Tabnas } = require('@tabnas/parser')
    const { Debug } = require('@tabnas/debug')
 
    const tn = new Tabnas()

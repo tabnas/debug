@@ -22,7 +22,7 @@ cd ts && npm install
 Create `demo.js`:
 
 ```js
-const { Tabnas } = require('tabnas')
+const { Tabnas } = require('@tabnas/parser')
 const { Debug } = require('@tabnas/debug')
 
 const tn = new Tabnas()

@@ -28,7 +28,7 @@ The plugin is a developer tool, not part of the parse path.
 
 ## The parser engine dependency
 
-The engine lives at `github.com/tabnas/parser` — npm package `tabnas`
+The engine lives at `github.com/tabnas/parser` — npm package `@tabnas/parser`
 (in `parser/ts`) and Go module `github.com/tabnas/parser/go`. It is **not
 published to a registry**, so both implementations consume it from
 source:
@@ -37,7 +37,7 @@ source:
   over HTTPS into `vendor/tabnas-parser` and builds its TypeScript
   `dist/`. Pin a different ref with `TABNAS_PARSER_REF`; set
   `TABNAS_PARSER_SKIP_TS_BUILD=1` to skip the TS build (Go-only).
-- TypeScript references it as `"tabnas": "file:../vendor/tabnas-parser/ts"`
+- TypeScript references it as `"@tabnas/parser": "file:../vendor/tabnas-parser/ts"`
   in `ts/package.json`.
 - Go requires `github.com/tabnas/parser/go` with a `replace` pointing at
   `../vendor/tabnas-parser/go` in `go/go.mod`.
