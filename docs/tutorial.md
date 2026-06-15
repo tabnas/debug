@@ -25,8 +25,8 @@ Create `demo.js`:
 const { Tabnas } = require('tabnas')
 const { Debug } = require('@tabnas/debug')
 
-const am = new Tabnas()
-am.use(Debug, { print: false, trace: false })
+const tn = new Tabnas()
+tn.use(Debug, { print: false, trace: false })
 ```
 
 ### Go
@@ -65,7 +65,7 @@ Ask the plugin what the parser knows.
 TypeScript — the plugin attached a `describe` method to the instance:
 
 ```js
-console.log(am.debug.describe())
+console.log(tn.debug.describe())
 ```
 
 Go — `Describe` is a package function you pass the instance to. It

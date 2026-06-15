@@ -10,14 +10,14 @@ running a parse.
    `describe` method:
 
    ```js
-   const am = new Tabnas()
-   am.use(Debug, { print: false, trace: false })
+   const tn = new Tabnas()
+   tn.use(Debug, { print: false, trace: false })
    ```
 
 2. Call `describe` and use the returned string however you like:
 
    ```js
-   console.log(am.debug.describe())
+   console.log(tn.debug.describe())
    ```
 
 ## Go

@@ -16,8 +16,8 @@ npm install tabnas @tabnas/debug
 const { Tabnas } = require('tabnas')
 const { Debug } = require('@tabnas/debug')
 
-const am = new Tabnas({ plugins: [Debug] })
-console.log(am.debug.describe())
+const tn = new Tabnas({ plugins: [Debug] })
+console.log(tn.debug.describe())
 ```
 
 ## License

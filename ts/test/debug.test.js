@@ -13,12 +13,12 @@ describe('debug', () => {
   })
 
   it('decorates an instance with describe()', () => {
-    const am = new Tabnas()
-    am.use(Debug, { print: false, trace: false })
-    assert.equal(typeof am.debug.describe, 'function')
-    assert.equal(typeof am.debug.describe(), 'string')
+    const tn = new Tabnas()
+    tn.use(Debug, { print: false, trace: false })
+    assert.equal(typeof tn.debug.describe, 'function')
+    assert.equal(typeof tn.debug.describe(), 'string')
 
-    const out = am.debug.describe()
+    const out = tn.debug.describe()
     for (const header of [
       '========= INSTANCE ========',
       '========= TOKENS ========',
@@ -33,9 +33,9 @@ describe('debug', () => {
   })
 
   it('reports the instance tag and config in describe()', () => {
-    const am = new Tabnas({ tag: 'demo' })
-    am.use(Debug, { print: false, trace: false })
-    const out = am.debug.describe()
+    const tn = new Tabnas({ tag: 'demo' })
+    tn.use(Debug, { print: false, trace: false })
+    const out = tn.debug.describe()
     assert.ok(out.includes('tag: demo'), 'describe() should report the instance tag')
     assert.ok(out.includes('  start: '), 'describe() should report the rule start')
   })

@@ -11,7 +11,7 @@ Any kind set to a falsy value is suppressed. The recognised kinds are
 Trace only lexing and rule events:
 
 ```js
-am.use(Debug, {
+tn.use(Debug, {
   print: false,
   trace: { lex: true, rule: true }, // others default to off
 })
@@ -20,7 +20,7 @@ am.use(Debug, {
 Start from "everything" and switch a few off:
 
 ```js
-am.use(Debug, {
+tn.use(Debug, {
   print: false,
   trace: { step: true, rule: true, lex: true, parse: true, node: false, stack: false },
 })
@@ -29,7 +29,7 @@ am.use(Debug, {
 Turn tracing off entirely — pass `false`:
 
 ```js
-am.use(Debug, { print: false, trace: false })
+tn.use(Debug, { print: false, trace: false })
 ```
 
 ## Go

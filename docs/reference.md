@@ -16,7 +16,7 @@ differ in shape. Both are documented below.
 Load it with the engine's `use` / `Use` method:
 
 ```js
-am.use(Debug, options)
+tn.use(Debug, options)
 ```
 
 ```go
@@ -61,7 +61,7 @@ from the canonical behaviour.
 
 | Language | Form |
 |---|---|
-| TypeScript | `am.debug.describe()` — method attached to the instance, returns `string` |
+| TypeScript | `tn.debug.describe()` — method attached to the instance, returns `string` |
 | Go | `debug.Describe(j)` — package function taking the instance, returns `(string, error)` |
 
 The Go form returns an `error` alongside the report to uphold the

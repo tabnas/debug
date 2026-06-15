@@ -20,7 +20,7 @@ The `print` option controls only this; it is independent of tracing.
 Set `print: false` when loading the plugin:
 
 ```js
-am.use(Debug, { print: false, trace: true })
+tn.use(Debug, { print: false, trace: true })
 ```
 
 You keep `describe` and tracing; you just stop the automatic dump.

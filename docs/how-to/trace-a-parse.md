@@ -14,14 +14,14 @@ specific input.
    const { Tabnas } = require('tabnas')
    const { Debug } = require('@tabnas/debug')
 
-   const am = new Tabnas()
-   am.use(Debug, { print: false, trace: true })
+   const tn = new Tabnas()
+   tn.use(Debug, { print: false, trace: true })
    ```
 
 3. Parse your input; the trace prints as it runs:
 
    ```js
-   am('{ "a": 1 }')
+   tn('{ "a": 1 }')
    ```
 
 4. Read the lines: the leading tag (`lex`, `rule`, `parse`, `node`,
