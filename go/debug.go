@@ -109,6 +109,9 @@ func Describe(j *tabnas.Tabnas) (out string, err error) {
 	cfg := j.Config()
 
 	return strings.Join([]string{
+		"========= INSTANCE ========",
+		describeInstance(j),
+		"",
 		"========= TOKENS ========",
 		describeTokens(j, cfg),
 		"",
@@ -121,10 +124,19 @@ func Describe(j *tabnas.Tabnas) (out string, err error) {
 		"========= LEXER =========",
 		describeLexer(cfg),
 		"",
+		"========= CONFIG ========",
+		describeConfig(cfg),
+		"",
 		"========= PLUGIN =========",
 		describePlugins(j),
 		"",
 	}, "\n"), nil
+}
+
+// describeInstance reports the instance tag (empty when unset), mirroring
+// the canonical TypeScript describe()'s INSTANCE section.
+func describeInstance(j *tabnas.Tabnas) string {
+	return "  tag: " + j.Options().Tag
 }
 
 // describeTokens lists every named token with its tin and, for fixed
@@ -270,17 +282,15 @@ func altActions(a *tabnas.AltSpec) string {
 }
 
 // describeLexer lists the custom lexer matchers in priority order. The
-// Go engine exposes only custom matchers; the built-in matchers are
-// summarised by the per-kind flags in the config.
+// Go engine's public API exposes only custom matchers (the built-in
+// matchers cannot be enumerated); the built-in lex enable flags are
+// reported in the CONFIG section instead. TypeScript lists every matcher
+// here — see ../docs/reference.md for this divergence.
 func describeLexer(cfg *tabnas.LexConfig) string {
 	if cfg == nil {
 		return ""
 	}
-	lines := []string{
-		fmt.Sprintf("  builtin: fixed=%v space=%v line=%v text=%v number=%v comment=%v string=%v value=%v",
-			cfg.FixedLex, cfg.SpaceLex, cfg.LineLex, cfg.TextLex,
-			cfg.NumberLex, cfg.CommentLex, cfg.StringLex, cfg.ValueLex),
-	}
+	lines := make([]string, 0, len(cfg.CustomMatchers))
 	for _, m := range cfg.CustomMatchers {
 		if m == nil {
 			continue
@@ -288,6 +298,28 @@ func describeLexer(cfg *tabnas.LexConfig) string {
 		lines = append(lines, fmt.Sprintf("  %s (priority=%d)", m.Name, m.Priority))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// describeConfig reports the key parser settings — rule start, finish,
+// safe-key, and the built-in lex enable flags — mirroring the canonical
+// TypeScript describe()'s CONFIG section.
+func describeConfig(cfg *tabnas.LexConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("  start: %s", cfg.RuleStart),
+		fmt.Sprintf("  finish: %v", cfg.FinishRule),
+		fmt.Sprintf("  safeKey: %v", cfg.SafeKey),
+		fmt.Sprintf("  lex.fixed: %v", cfg.FixedLex),
+		fmt.Sprintf("  lex.space: %v", cfg.SpaceLex),
+		fmt.Sprintf("  lex.line: %v", cfg.LineLex),
+		fmt.Sprintf("  lex.text: %v", cfg.TextLex),
+		fmt.Sprintf("  lex.number: %v", cfg.NumberLex),
+		fmt.Sprintf("  lex.comment: %v", cfg.CommentLex),
+		fmt.Sprintf("  lex.string: %v", cfg.StringLex),
+		fmt.Sprintf("  lex.value: %v", cfg.ValueLex),
+	}, "\n")
 }
 
 // describePlugins reports the loaded plugin count. The Go engine stores

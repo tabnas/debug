@@ -79,8 +79,8 @@ if err != nil {
 fmt.Println(report)
 ```
 
-Run it. You will see a report divided into labelled sections — `TOKENS`,
-`RULES`, `ALTS`, `LEXER` and `PLUGIN`. Each lists part of the parser's
+Run it. You will see a report divided into labelled sections — `INSTANCE`,
+`TOKENS`, `RULES`, `ALTS`, `LEXER`, `CONFIG` and `PLUGIN`. Each lists part of the parser's
 active configuration. The engine ships no grammar of its own, so a bare
 instance shows little; add tokens and rules (or load a grammar plugin)
 and they appear here. Skim it — the point is that the grammar is visible.

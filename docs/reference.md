@@ -77,10 +77,12 @@ exact headers:
 
 | Header | Contents |
 |---|---|
+| `========= INSTANCE ========` | The instance tag (`tag:`), empty when unset. |
 | `========= TOKENS ========` | Each token: name, tin, and fixed source text (if any). |
 | `========= RULES =========` | Each rule with its open/close alternate counts (TS also shows push/rule transition targets). |
 | `========= ALTS =========` | Each rule's open and close alternates: token sequence, push (`p`), replace (`r`), backtrack (`b`), counters (`n`), group (`g`). |
-| `========= LEXER =========` | Lexer matchers. TS lists every matcher; Go lists the built-in enable flags plus any custom matchers (the only ones its public API exposes). |
+| `========= LEXER =========` | Lexer matchers. TS lists every matcher; Go lists only the custom matchers its public API exposes (the built-in enable flags are reported under `CONFIG`). |
+| `========= CONFIG ========` | Key parser settings: rule `start`, `finish`, `safeKey`, and the built-in lex enable flags (`lex.fixed`, `lex.space`, `lex.line`, `lex.text`, `lex.number`, `lex.comment`, `lex.string`, `lex.value`). |
 | `========= PLUGIN =========` | Loaded plugins. TS lists each plugin and its options; Go reports the plugin count (the Go engine stores plugins as bare functions). |
 
 Section headers are identical across both implementations so output can

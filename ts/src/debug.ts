@@ -63,6 +63,10 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
       let rules = tabnas.rule()
 
       return [
+        '========= INSTANCE ========',
+        '  tag: ' + (tabnas.internal().merged.tag ?? ''),
+        '\n',
+
         '========= TOKENS ========',
         Object.entries(cfg.t)
           .filter((te) => 'string' === typeof te[1])
@@ -120,6 +124,22 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
             )) ||
           []
         ).join('\n  '),
+        '\n',
+
+        '========= CONFIG ========',
+        [
+          '  start: ' + cfg.rule.start,
+          '  finish: ' + cfg.rule.finish,
+          '  safeKey: ' + cfg.safe.key,
+          '  lex.fixed: ' + cfg.fixed.lex,
+          '  lex.space: ' + cfg.space.lex,
+          '  lex.line: ' + cfg.line.lex,
+          '  lex.text: ' + cfg.text.lex,
+          '  lex.number: ' + cfg.number.lex,
+          '  lex.comment: ' + cfg.comment.lex,
+          '  lex.string: ' + cfg.string.lex,
+          '  lex.value: ' + cfg.value.lex,
+        ].join('\n'),
         '\n',
 
         '\n',

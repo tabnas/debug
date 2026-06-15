@@ -36,10 +36,12 @@ func TestUseAndDescribe(t *testing.T) {
 		t.Fatal("Describe returned an empty string")
 	}
 	for _, header := range []string{
+		"========= INSTANCE ========",
 		"========= TOKENS ========",
 		"========= RULES =========",
 		"========= ALTS =========",
 		"========= LEXER =========",
+		"========= CONFIG ========",
 		"========= PLUGIN =========",
 	} {
 		if !strings.Contains(out, header) {
@@ -65,6 +67,24 @@ func TestTraceEnables(t *testing.T) {
 func TestDefaults(t *testing.T) {
 	if trace, ok := debug.Defaults["trace"].(bool); !ok || !trace {
 		t.Error(`Defaults["trace"] should be true`)
+	}
+}
+
+// TestDescribeIncludesTagAndConfig checks that the INSTANCE section reports
+// the instance tag and the CONFIG section reports the rule start, mirroring
+// the canonical TypeScript describe() output.
+func TestDescribeIncludesTagAndConfig(t *testing.T) {
+	j := tabnas.Make(tabnas.Options{Tag: "demo"})
+
+	out, err := debug.Describe(j)
+	if err != nil {
+		t.Fatalf("Describe returned error: %v", err)
+	}
+	if !strings.Contains(out, "tag: demo") {
+		t.Error("Describe INSTANCE section should report the instance tag")
+	}
+	if !strings.Contains(out, "  start: ") {
+		t.Error("Describe CONFIG section should report the rule start")
 	}
 }
 

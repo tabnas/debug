@@ -39,7 +39,7 @@ fmt.Println(report)
 ## Reading the output
 
 The report is divided into labelled sections in a fixed order:
-`TOKENS`, `RULES`, `ALTS`, `LEXER` and `PLUGIN`. The
+`INSTANCE`, `TOKENS`, `RULES`, `ALTS`, `LEXER`, `CONFIG` and `PLUGIN`. The
 [Reference](../reference.md#describing-a-grammar) explains each, and
 notes where the Go output is summarised relative to TypeScript.
 
