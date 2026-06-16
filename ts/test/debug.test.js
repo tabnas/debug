@@ -323,4 +323,94 @@ describe('debug', () => {
       )
     })
   })
+
+  describe('model() structured output', () => {
+    function jsonModel(tag) {
+      const tn = new Tabnas(tag ? { tag } : undefined)
+      tn.use(json)
+      tn.use(Debug, { print: false, trace: false })
+      return { tn, model: tn.debug.model() }
+    }
+
+    it('returns an object with every documented section', () => {
+      const { model: m } = jsonModel('demo')
+      assert.equal(typeof m, 'object')
+      for (const key of [
+        'tag', 'tokens', 'tokenSets', 'rules', 'graph', 'lexer', 'config', 'plugins', 'abnf',
+      ]) {
+        assert.ok(key in m, 'model() missing section ' + key)
+      }
+      assert.equal(m.tag, 'demo')
+      assert.equal(typeof m.abnf, 'string')
+    })
+
+    it('describes rules and alternates as structured data', () => {
+      const { model: m } = jsonModel()
+      assert.deepEqual(m.rules.map((r) => r.name).sort(), ['elem', 'list', 'map', 'pair', 'val'])
+      const val = m.rules.find((r) => r.name === 'val')
+      assert.ok(Array.isArray(val.open) && val.open.length >= 2, 'val should have several open alts')
+      const toMap = val.open.find((a) => a.push === 'map')
+      assert.ok(toMap, 'val should have an alt that pushes map')
+      assert.ok(Array.isArray(toMap.seq) && toMap.seq.length > 0, 'alt seq carries the lookahead token(s)')
+      assert.equal(typeof toMap.action, 'boolean')
+      assert.ok(Array.isArray(toMap.groups))
+    })
+
+    it('exposes the rule-reference graph (push/replace edges)', () => {
+      const { model: m } = jsonModel()
+      const val = m.graph.find((g) => g.name === 'val')
+      assert.deepEqual(val.openPush.slice().sort(), ['list', 'map'])
+      assert.deepEqual(val.openReplace, [])
+      const map = m.graph.find((g) => g.name === 'map')
+      assert.ok(map.openPush.includes('pair'), 'map should push pair')
+    })
+
+    it('reports config and plugins structurally', () => {
+      const { model: m } = jsonModel()
+      assert.equal(m.config.start, 'val')
+      assert.equal(typeof m.config.finish, 'boolean')
+      assert.equal(typeof m.config.lex.fixed, 'boolean')
+      assert.ok(m.plugins.some((p) => p.name === 'json'), 'plugins should list json')
+      assert.ok(m.plugins.some((p) => p.name === 'Debug'), 'plugins should list Debug')
+    })
+
+    it('lists tokens with tin, name, and fixed literals', () => {
+      const { model: m } = jsonModel()
+      assert.ok(m.tokens.length > 0)
+      for (const t of m.tokens) {
+        assert.equal(typeof t.tin, 'number')
+        assert.equal(typeof t.name, 'string')
+      }
+      assert.ok(
+        m.tokens.some((t) => 'string' === typeof t.fixed && t.fixed.length > 0),
+        'at least one token should carry a fixed literal (json punctuation)',
+      )
+    })
+
+    it('the grammar portion is JSON-serialisable and round-trips', () => {
+      const { model: m } = jsonModel()
+      const grammar = {
+        tag: m.tag, tokens: m.tokens, tokenSets: m.tokenSets,
+        rules: m.rules, graph: m.graph, config: m.config, abnf: m.abnf,
+      }
+      const round = JSON.parse(JSON.stringify(grammar))
+      assert.deepEqual(round.rules, m.rules)
+      assert.equal(round.abnf, m.abnf)
+    })
+
+    it('model() and rule() agree on the rule set', () => {
+      const { tn, model: m } = jsonModel()
+      assert.deepEqual(m.rules.map((r) => r.name).sort(), Object.keys(tn.rule()).sort())
+    })
+
+    it('renders a null alternate entry as ***INVALID*** in the alt seq', () => {
+      const tn = makeMinimal()
+      tn.use(Debug, { print: false, trace: false })
+      tn.rule('top').def.open[0].s = [null]
+      let m
+      assert.doesNotThrow(() => { m = tn.debug.model() })
+      const top = m.rules.find((r) => r.name === 'top')
+      assert.ok(top.open[0].seq.includes('***INVALID***'))
+    })
+  })
 })
