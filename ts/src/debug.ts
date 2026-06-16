@@ -48,6 +48,57 @@ const DEFAULTS: DebugOptions = {
   },
 }
 
+// ---- structured model -------------------------------------------------
+// `describe()` renders the instance as printable text; `model()` returns
+// the same information as a typed, JSON-serialisable object so tools and
+// tests can consume the grammar/instance programmatically.
+
+export type DebugTokenInfo = { tin: number; name: string; fixed?: string }
+export type DebugTokenSet = { name: string; tins: number[] }
+export type DebugAltInfo = {
+  seq: (string | string[])[]          // token name(s) per lookahead position
+  push?: string                       // `p` target rule (or '<fn>')
+  replace?: string                    // `r` target rule (or '<fn>')
+  back?: number                       // `b` token push-back
+  counters?: Record<string, number>   // `n` counter ops
+  groups: string[]                    // `g` group tags
+  action: boolean                     // `a` present
+  cond: boolean                       // `c` present
+  modifier: boolean                   // `h` present
+}
+export type DebugRuleInfo = {
+  name: string
+  open: DebugAltInfo[]
+  close: DebugAltInfo[]
+}
+export type DebugRuleEdges = {
+  name: string
+  openPush: string[]
+  openReplace: string[]
+  closePush: string[]
+  closeReplace: string[]
+}
+export type DebugLexMatcher = { order: number; matcher: string; make: string }
+export type DebugConfigInfo = {
+  start: string
+  finish: boolean
+  safeKey: boolean
+  lex: Record<string, boolean>
+}
+export type DebugPluginInfo = { name: string; options?: Record<string, any> }
+export type DebugModel = {
+  tag: string
+  tokens: DebugTokenInfo[]
+  tokenSets: DebugTokenSet[]
+  rules: DebugRuleInfo[]
+  graph: DebugRuleEdges[]
+  lexer: DebugLexMatcher[]
+  config: DebugConfigInfo
+  plugins: DebugPluginInfo[]
+  abnf: string
+}
+
+
 const { entries, tokenize } = util
 
 const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
@@ -169,6 +220,79 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
         emitAbnf(tabnas),
         '\n',
       ].join('\n')
+    },
+
+    // Structured counterpart to describe(): the instance/grammar as a
+    // typed, JSON-serialisable object (token table, rules + alternates,
+    // rule-reference graph, lexer matchers, config, plugins, ABNF text).
+    model: function(): DebugModel {
+      const cfg = tabnas.internal().config
+      const rules = tabnas.rule()
+      const match = (cfg.lex as any).match
+
+      return {
+        tag: tabnas.internal().merged.tag ?? '',
+
+        tokens: Object.entries(cfg.t as Record<string, any>)
+          .filter((te) => 'string' === typeof te[1])
+          .map((te) => {
+            const fixed = (cfg.fixed.ref as any)[te[0]]
+            const info: DebugTokenInfo = { tin: Number(te[0]), name: te[1] }
+            if (fixed) info.fixed = fixed
+            return info
+          }),
+
+        tokenSets: Object.entries(cfg.tokenSet).map((te) => ({
+          name: te[0],
+          tins: Array.isArray(te[1])
+            ? (te[1] as number[]).slice()
+            : Object.keys((cfg.tokenSetTins as any)[te[0]] ?? {}).map(Number),
+        })),
+
+        rules: values(rules).map((rs: any) => ({
+          name: rs.name,
+          open: rs.def.open.map((a: any) => altInfo(tabnas, a)),
+          close: rs.def.close.map((a: any) => altInfo(tabnas, a)),
+        })),
+
+        graph: keys(rules).map((n: string) => ({
+          name: n,
+          openPush: ruleEdges(rules, n, 'open', 'p'),
+          openReplace: ruleEdges(rules, n, 'open', 'r'),
+          closePush: ruleEdges(rules, n, 'close', 'p'),
+          closeReplace: ruleEdges(rules, n, 'close', 'r'),
+        })),
+
+        lexer: ((match as any[]) || []).map((m: any) => ({
+          order: m.order,
+          matcher: String(m.matcher),
+          make: (m.make && m.make.name) || '',
+        })),
+
+        config: {
+          start: cfg.rule.start,
+          finish: cfg.rule.finish,
+          safeKey: cfg.safe.key,
+          lex: {
+            fixed: cfg.fixed.lex,
+            space: cfg.space.lex,
+            line: cfg.line.lex,
+            text: cfg.text.lex,
+            number: cfg.number.lex,
+            comment: cfg.comment.lex,
+            string: cfg.string.lex,
+            value: cfg.value.lex,
+          },
+        },
+
+        plugins: tabnas.internal().plugins.map((p: Plugin) => {
+          const info: DebugPluginInfo = { name: p.name }
+          if (p.options) info.options = p.options
+          return info
+        }),
+
+        abnf: emitAbnf(tabnas),
+      }
     },
   }
 
@@ -643,6 +767,50 @@ function ruleTreeStep(
         .map((step: any) => ('string' === typeof step ? step : '<F>')),
     ),
   ].join(' ')
+}
+
+// Structured form of a single alternate (the data behind descAlt's text).
+function altInfo(tabnas: Tabnas, a: any): DebugAltInfo {
+  const seq: (string | string[])[] = (a.s || []).map((tin: any) =>
+    null == tin
+      ? '***INVALID***'
+      : 'number' === typeof tin
+        ? tabnas.token[tin]
+        : Array.isArray(tin)
+          ? tin.map((t: any) => ('number' === typeof t ? tabnas.token[t] : String(t)))
+          : String(tin),
+  )
+  const info: DebugAltInfo = {
+    seq,
+    groups: a.g && a.g.length ? a.g.slice() : [],
+    action: null != a.a,
+    cond: null != a.c,
+    modifier: null != a.h,
+  }
+  if ('string' === typeof a.p) info.push = a.p
+  else if (a.p) info.push = '<fn>'
+  if ('string' === typeof a.r) info.replace = a.r
+  else if (a.r) info.replace = '<fn>'
+  if (null != a.b) info.back = a.b
+  if (null != a.n) info.counters = a.n
+  return info
+}
+
+// The distinct push/replace rule targets of a rule's open/close alts —
+// the structured form of ruleTreeStep (array instead of a joined string).
+function ruleEdges(
+  rsm: any,
+  name: string,
+  state: 'open' | 'close',
+  step: 'p' | 'r',
+): string[] {
+  return [
+    ...new Set(
+      rsm[name].def[state]
+        .filter((alt: any) => alt[step])
+        .map((alt: any) => ('string' === typeof alt[step] ? alt[step] : '<fn>')),
+    ),
+  ] as string[]
 }
 
 function descTokenState(ctx: Context) {

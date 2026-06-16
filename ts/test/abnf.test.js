@@ -27,11 +27,12 @@ const { Tabnas } = require('@tabnas/parser')
 const { Debug } = require('..')
 
 // bnf, loaded by sibling PATH only — NOT a package dependency. The debug
-// repo sits beside the bnf repo in the tabnas multi-repo layout; resolve
-// its built dist relative to this test file so the path stays correct
-// regardless of where the repos are checked out.
+// repo sits beside the bnf repo (`@tabnas/bnf`, in the `abnf` directory)
+// in the tabnas multi-repo layout; resolve its built dist relative to this
+// test file so the path stays correct regardless of where the repos are
+// checked out.
 const { bnfConvert } = require(
-  require('path').resolve(__dirname, '..', '..', '..', 'bnf', 'ts', 'dist', 'bnf.js'),
+  require('path').resolve(__dirname, '..', '..', '..', 'abnf', 'ts', 'dist', 'bnf.js'),
 )
 
 // Recognise `input` with a compiled grammar `spec`. Returns a normalised
