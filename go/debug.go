@@ -27,6 +27,9 @@ import (
 	tabnas "github.com/tabnas/parser/go"
 )
 
+// Version is the module version, injected at release by `make publish-go`.
+const Version = "0.1.0"
+
 // Defaults are the option values used when the plugin is loaded without
 // an explicit configuration. They mirror the canonical TypeScript
 // DEFAULTS, where tracing is on by default.
