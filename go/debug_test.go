@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Rodger and other contributors, MIT License
 
-package debug_test
+package tabnasdebug_test
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 
 	tabnas "github.com/tabnas/parser/go"
 
-	debug "github.com/tabnas/debug/go"
+	tabnasdebug "github.com/tabnas/debug/go"
 )
 
 // headersGolden is the shared cross-runtime fixture of the eight canonical
@@ -48,8 +48,8 @@ func buildTreeGrammar(t *testing.T) *tabnas.Tabnas {
 // TestLoads checks that the plugin value is present, mirroring the
 // "loads" case in ../ts/test/debug.test.js.
 func TestLoads(t *testing.T) {
-	if debug.Debug == nil {
-		t.Fatal("debug.Debug is nil")
+	if tabnasdebug.Debug == nil {
+		t.Fatal("tabnasdebug.Debug is nil")
 	}
 }
 
@@ -58,11 +58,11 @@ func TestLoads(t *testing.T) {
 // "decorates an instance with describe()" case in the TypeScript tests.
 func TestUseAndDescribe(t *testing.T) {
 	j := tabnas.Make()
-	if err := j.Use(debug.Debug, map[string]any{"trace": false}); err != nil {
+	if err := j.Use(tabnasdebug.Debug, map[string]any{"trace": false}); err != nil {
 		t.Fatalf("Use returned error: %v", err)
 	}
 
-	out, err := debug.Describe(j)
+	out, err := tabnasdebug.Describe(j)
 	if err != nil {
 		t.Fatalf("Describe returned error: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestUseAndDescribe(t *testing.T) {
 // and that a subsequent parse runs (trace output goes to stdout).
 func TestTraceEnables(t *testing.T) {
 	j := tabnas.Make()
-	if err := j.Use(debug.Debug, map[string]any{"trace": true}); err != nil {
+	if err := j.Use(tabnasdebug.Debug, map[string]any{"trace": true}); err != nil {
 		t.Fatalf("Use with trace returned error: %v", err)
 	}
 	if _, err := j.Parse("1"); err != nil {
@@ -100,7 +100,7 @@ func TestTraceEnables(t *testing.T) {
 // TestDefaults checks that tracing is on by default, keeping the Go
 // defaults in step with the canonical TypeScript DEFAULTS.
 func TestDefaults(t *testing.T) {
-	if trace, ok := debug.Defaults["trace"].(bool); !ok || !trace {
+	if trace, ok := tabnasdebug.Defaults["trace"].(bool); !ok || !trace {
 		t.Error(`Defaults["trace"] should be true`)
 	}
 }
@@ -111,7 +111,7 @@ func TestDefaults(t *testing.T) {
 func TestDescribeIncludesTagAndConfig(t *testing.T) {
 	j := tabnas.Make(tabnas.Options{Tag: "demo"})
 
-	out, err := debug.Describe(j)
+	out, err := tabnasdebug.Describe(j)
 	if err != nil {
 		t.Fatalf("Describe returned error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestDescribeNoPanicMalformedRules(t *testing.T) {
 	nilAlt.AddOpen(nil)
 	rsm["__nil_alt__"] = nilAlt
 
-	out, err := debug.Describe(j)
+	out, err := tabnasdebug.Describe(j)
 	if err != nil {
 		t.Fatalf("Describe returned error on malformed rules: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestDescribeNoPanicMalformedRules(t *testing.T) {
 // empty string, mirroring the engine's no-panic guarantee. A nil instance
 // dereferences inside Describe and must surface as an error, not a crash.
 func TestDescribeErrorIsInternal(t *testing.T) {
-	out, err := debug.Describe(nil)
+	out, err := tabnasdebug.Describe(nil)
 	if err == nil {
 		t.Fatal("Describe(nil) should return an error, got nil")
 	}
@@ -181,7 +181,7 @@ func TestDescribeErrorIsInternal(t *testing.T) {
 func TestTraceContentCaptured(t *testing.T) {
 	var buf bytes.Buffer
 	j := buildTreeGrammar(t)
-	if err := j.Use(debug.Debug, map[string]any{"trace": true, "out": &buf}); err != nil {
+	if err := j.Use(tabnasdebug.Debug, map[string]any{"trace": true, "out": &buf}); err != nil {
 		t.Fatalf("Use with trace+out returned error: %v", err)
 	}
 
@@ -215,7 +215,7 @@ func TestTraceContentCaptured(t *testing.T) {
 // stdout; we only assert the no-error, no-panic path here.
 func TestTraceDefaultOutDoesNotCrash(t *testing.T) {
 	j := buildTreeGrammar(t)
-	if err := j.Use(debug.Debug, map[string]any{"trace": true}); err != nil {
+	if err := j.Use(tabnasdebug.Debug, map[string]any{"trace": true}); err != nil {
 		t.Fatalf("Use with trace returned error: %v", err)
 	}
 	if _, err := j.Parse("ax"); err != nil {
@@ -233,7 +233,7 @@ func TestTraceDefaultOutDoesNotCrash(t *testing.T) {
 func TestDescribeBodies(t *testing.T) {
 	j := buildTreeGrammar(t)
 
-	out, err := debug.Describe(j)
+	out, err := tabnasdebug.Describe(j)
 	if err != nil {
 		t.Fatalf("Describe returned error: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestHeadersMatchGolden(t *testing.T) {
 	}
 
 	j := tabnas.Make()
-	out, err := debug.Describe(j)
+	out, err := tabnasdebug.Describe(j)
 	if err != nil {
 		t.Fatalf("Describe returned error: %v", err)
 	}
@@ -345,7 +345,7 @@ func buildAddGrammar(t *testing.T) *tabnas.Tabnas {
 func TestAbnfAddGrammar(t *testing.T) {
 	j := buildAddGrammar(t)
 
-	out, err := debug.Abnf(j)
+	out, err := tabnasdebug.Abnf(j)
 	if err != nil {
 		t.Fatalf("Abnf returned error: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestAbnfAddGrammar(t *testing.T) {
 func TestDescribeIncludesAbnf(t *testing.T) {
 	j := buildAddGrammar(t)
 
-	out, err := debug.Describe(j)
+	out, err := tabnasdebug.Describe(j)
 	if err != nil {
 		t.Fatalf("Describe returned error: %v", err)
 	}

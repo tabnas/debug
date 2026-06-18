@@ -357,8 +357,8 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
 // Emit an ABNF representation of the instance's *live* grammar.
 //
 // This reads ONLY the running engine (config + normalised rule specs);
-// it never imports @tabnas/bnf. The mapping is the empirical inverse of
-// bnf's forward encoding (see the round-trip test): tabnas rules become
+// it never imports @tabnas/abnf. The mapping is the empirical inverse of
+// abnf's forward encoding (see the round-trip test): tabnas rules become
 // ABNF productions, OPEN alts become `/`-separated alternatives, the
 // token sequence (.s) plus any push/replace target (.p/.r) becomes a
 // space-separated element list, and each token resolves to an ABNF

@@ -13,7 +13,7 @@
 // TinName, TokenSet, Plugins). The output here therefore tracks the
 // TypeScript behaviour as closely as the Go engine API allows; see
 // ../docs/reference.md for the documented differences.
-package debug
+package tabnasdebug
 
 import (
 	"fmt"

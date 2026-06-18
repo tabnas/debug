@@ -65,12 +65,12 @@ dependency**:
   fixture from `@tabnas/parser`'s `dist-test/json-plugin.js` (resolved
   relative to the engine package) to exercise `describe`/`model` against
   a real grammar.
-- `ts/test/abnf.test.js` round-trips `abnf()` through `@tabnas/bnf`'s
-  `bnfConvert`, loaded from `../../abnf/ts/dist/bnf.js`. This is a
-  **hard independence constraint**: `@tabnas/bnf` must *not* be a runtime
+- `ts/test/abnf.test.js` round-trips `abnf()` through `@tabnas/abnf`'s
+  `abnfConvert`, loaded from `../../abnf/ts/dist/abnf.js`. This is a
+  **hard independence constraint**: `@tabnas/abnf` must *not* be a runtime
   dependency of the debug plugin; it is used in the test only.
 
-`@tabnas/bnf` (the `abnf` repo) and `@tabnas/railroad` are present as
+`@tabnas/abnf` (the `abnf` repo) and `@tabnas/railroad` are present as
 `file:` devDependencies for exactly these sibling test/diagram needs.
 
 ### Note: `scripts/fetch-parser.sh` is legacy
@@ -132,7 +132,7 @@ grammar repos' `test/debug-model.test.ts` consume this, so be careful:
 - `m.plugins` lists loaded plugins by name (e.g. a grammar test asserts
   `m.plugins` includes `json`).
 - `m.abnf` is the re-compilable ABNF string; `abnf.test.js` proves it
-  re-compiles via `@tabnas/bnf`.
+  re-compiles via `@tabnas/abnf`.
 
 Grammar repos load `@tabnas/debug` with a **skip-if-absent guard** so
 their core suite still runs when the dev sibling isn't built.
@@ -190,7 +190,7 @@ Go side locally with the `GOWORK=off` commands above.)
 ## Tests mirror each other
 
 `ts/test/debug.test.js` ↔ `go/debug_test.go`; keep them aligned. The TS
-suite also has `ts/test/abnf.test.js` (the `abnf()` ↔ `@tabnas/bnf`
+suite also has `ts/test/abnf.test.js` (the `abnf()` ↔ `@tabnas/abnf`
 round-trip) and `ts/test/doc-examples.test.js` (verifies the snippets in
 `docs/`). When you add a capability, extend `docs/reference.md` and add a
 how-to if it introduces a new task.

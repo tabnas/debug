@@ -4,16 +4,16 @@
 /*  abnf.test.js
  *  Round-trip test for the debug plugin's `abnf()` emitter.
  *
- *  HARD INDEPENDENCE CONSTRAINT: @tabnas/bnf must NOT be a dependency of
+ *  HARD INDEPENDENCE CONSTRAINT: @tabnas/abnf must NOT be a dependency of
  *  @tabnas/debug. The emitter (src/debug.ts) reads ONLY the live engine
- *  and never imports bnf. bnf is used HERE, in the test only, and is
+ *  and never imports abnf. abnf is used HERE, in the test only, and is
  *  loaded by SIBLING PATH (never via package.json) so it stays out of
  *  the dependency graph.
  *
  *  Round-trip criterion: for a sample ABNF A0,
- *    G1 = bnfConvert(A0) installed on a Tabnas instance;
+ *    G1 = abnfConvert(A0) installed on a Tabnas instance;
  *    A1 = thatInstance.debug.abnf();
- *    G2 = bnfConvert(A1) on a fresh instance;
+ *    G2 = abnfConvert(A1) on a fresh instance;
  *  G1 and G2 must RECOGNISE the sample inputs identically — same parse
  *  success/failure and same top `.rule` name. (ABNF has no actions, so
  *  parse-output values are out of scope.)
@@ -26,13 +26,13 @@ const path = require('node:path')
 const { Tabnas } = require('@tabnas/parser')
 const { Debug } = require('..')
 
-// bnf, loaded by sibling PATH only — NOT a package dependency. The debug
-// repo sits beside the bnf repo (`@tabnas/bnf`, in the `abnf` directory)
+// abnf, loaded by sibling PATH only — NOT a package dependency. The debug
+// repo sits beside the abnf repo (`@tabnas/abnf`, in the `abnf` directory)
 // in the tabnas multi-repo layout; resolve its built dist relative to this
 // test file so the path stays correct regardless of where the repos are
 // checked out.
-const { bnfConvert } = require(
-  require('path').resolve(__dirname, '..', '..', '..', 'abnf', 'ts', 'dist', 'bnf.js'),
+const { abnfConvert } = require(
+  require('path').resolve(__dirname, '..', '..', '..', 'abnf', 'ts', 'dist', 'abnf.js'),
 )
 
 // Recognise `input` with a compiled grammar `spec`. Returns a normalised
@@ -50,7 +50,7 @@ function recognise(spec, input) {
 
 // Assert the full round trip for one sample grammar over a set of inputs.
 function assertRoundTrip(abnf0, inputs) {
-  const g1 = bnfConvert(abnf0)
+  const g1 = abnfConvert(abnf0)
 
   const tn = new Tabnas()
   tn.use(Debug, { print: false, trace: false })
@@ -62,7 +62,7 @@ function assertRoundTrip(abnf0, inputs) {
 
   let g2
   try {
-    g2 = bnfConvert(abnf1)
+    g2 = abnfConvert(abnf1)
   } catch (e) {
     assert.fail(
       'emitted ABNF did not re-compile:\n' + abnf1 + '\n' + e.message,
@@ -146,7 +146,7 @@ describe('abnf', () => {
   it('describe() includes an ABNF section', () => {
     const tn = new Tabnas()
     tn.use(Debug, { print: false, trace: false })
-    tn.grammar(bnfConvert('greet = "hi" / "hello"'))
+    tn.grammar(abnfConvert('greet = "hi" / "hello"'))
     const desc = tn.debug.describe()
     assert.ok(desc.includes('========= ABNF ========='), 'has ABNF header')
     assert.ok(desc.includes('greet = HI / HELLO'), 'has emitted ABNF rule')

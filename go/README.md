@@ -27,7 +27,7 @@ import (
 	"fmt"
 
 	tabnas "github.com/tabnas/parser/go"
-	debug "github.com/tabnas/debug/go"
+	tabnasdebug "github.com/tabnas/debug/go"
 )
 
 func main() {
@@ -35,14 +35,14 @@ func main() {
 
 	// Describe the grammar. Describe returns (string, error): it never
 	// panics, surfacing any failure as an "internal"-code error instead.
-	report, err := debug.Describe(j)
+	report, err := tabnasdebug.Describe(j)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println(report)
 
 	// Trace a parse (lex + rule events go to stdout).
-	j.Use(debug.Debug, map[string]any{"trace": true})
+	j.Use(tabnasdebug.Debug, map[string]any{"trace": true})
 	j.Parse("a:1")
 }
 ```
