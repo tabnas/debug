@@ -1,15 +1,20 @@
 # tabnas-debug (Go)
 
-Debug plugin for the [`tabnas`](https://github.com/tabnas/parser) parser
-engine.
+Debug / introspection plugin for the
+[`tabnas`](https://github.com/tabnas/parser) parser engine, package
+`tabnasdebug`.
 
-Adds parse tracing and a `Describe` function that dumps a parser
-instance's active grammar. This is the Go port of the canonical
-TypeScript implementation in [`../ts`](../ts); the TypeScript version is
-authoritative and this package tracks it. Because the Go engine exposes
-tracing and introspection through different idioms than TypeScript, the
-Go surface differs in shape — see [the reference](../docs/reference.md)
-for the details.
+It makes a grammar *visible*: `Describe` dumps an instance's installed
+grammar (tokens, rules, plugins) as labelled text, `Abnf` re-expresses it
+as ABNF, and `trace` logs a parse step by step. A dev/test aid — never a
+runtime dependency.
+
+This is the Go port of the canonical TypeScript implementation in
+[`../ts`](../ts); the TypeScript version is authoritative and this package
+tracks it. The Go engine exposes tracing and introspection through
+different idioms, so the surface differs in shape — notably, Go has no
+structured `model()`. See [the concepts doc](doc/concepts.md) and
+[reference](doc/reference.md) for the details.
 
 ## Install
 
@@ -41,11 +46,19 @@ func main() {
 	}
 	fmt.Println(report)
 
-	// Trace a parse (lex + rule events go to stdout).
+	// Trace a parse (lex + rule events go to stdout by default).
 	j.Use(tabnasdebug.Debug, map[string]any{"trace": true})
 	j.Parse("a:1")
 }
 ```
+
+## Documentation
+
+- [Tutorial](doc/tutorial.md) — zero to a working inspection, step by step.
+- [How-to guide](doc/guide.md) — focused recipes.
+- [Reference](doc/reference.md) — the exact exports, options and output.
+- [Concepts](doc/concepts.md) — how it works and how it differs from the
+  TypeScript version.
 
 ## Build and test
 

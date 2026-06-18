@@ -1,10 +1,12 @@
 # @tabnas/debug
 
-Debug plugin for the [`tabnas`](https://github.com/tabnas/parser) parser.
+Debug / introspection plugin for the
+[`tabnas`](https://github.com/tabnas/parser) parser.
 
-Adds parse tracing, a printable `describe()`, and a **structured** `model()`
-to a `Tabnas` instance — so you can inspect the grammar and instance as text
-*or* as data.
+It makes a grammar *visible*: a structured `model()` and a printable
+`describe()` return a description of an instance's installed grammar
+(rules, tokens, plugins), `abnf()` re-expresses it as ABNF, and `trace`
+logs a parse step by step. A dev/test aid — never a runtime dependency.
 
 ## Install
 
@@ -41,16 +43,24 @@ information as a typed, JSON-serialisable object (`DebugModel`):
 | `tag` | the instance tag |
 | `tokens` | `{ tin, name, fixed? }[]` — the token table |
 | `tokenSets` | named token sets → member tins |
-| `rules` | each rule's `open` / `close` alternates as structured `{ seq, push, replace, back, counters, groups, action, cond, modifier }` |
-| `graph` | per-rule push/replace reference edges (`openPush`, `openReplace`, `closePush`, `closeReplace`) |
+| `rules` | each rule's `open` / `close` alternates as `{ seq, push, replace, back, counters, groups, action, cond, modifier }` |
+| `graph` | per-rule push/replace edges (`openPush`, `openReplace`, `closePush`, `closeReplace`) |
 | `lexer` | the lexer matchers (`order`, `matcher`, `make`) |
 | `config` | start rule, finish flag, safe-key, and the per-lexer enable flags |
 | `plugins` | the applied plugins (name + options) |
 | `abnf` | the live grammar rendered as ABNF text |
 
-The grammar-structure fields round-trip through `JSON.stringify`. The
-printable helpers — `describe()` (full dump), `abnf()` (ABNF text) — and
-per-kind parse `trace` logging remain available.
+The grammar-structure fields round-trip through `JSON.stringify`.
+
+## Documentation
+
+- [Tutorial](doc/tutorial.md) — zero to a working inspection, step by step.
+- [How-to guide](doc/guide.md) — focused recipes (diff grammars, capture
+  traces, round-trip ABNF).
+- [Reference](doc/reference.md) — the exact exports, options and types.
+- [Concepts](doc/concepts.md) — how it works and why.
+
+The Go port lives in [`../go`](../go) and tracks this implementation.
 
 ## License
 
