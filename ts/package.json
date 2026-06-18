@@ -1,6 +1,6 @@
 {
   "name": "@tabnas/debug",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "main": "dist/debug.js",
   "type": "commonjs",
   "types": "dist/debug.d.ts",
@@ -33,7 +33,7 @@
     ".": "./dist/debug.js"
   },
   "peerDependencies": {
-    "@tabnas/parser": ">=2"
+    "@tabnas/parser": "^0.2.0"
   },
   "devDependencies": {
     "@tabnas/abnf": "file:../../abnf/ts",
