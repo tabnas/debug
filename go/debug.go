@@ -28,7 +28,7 @@ import (
 )
 
 // Version is the module version, injected at release by `make publish-go`.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Defaults are the option values used when the plugin is loaded without
 // an explicit configuration. They mirror the canonical TypeScript
