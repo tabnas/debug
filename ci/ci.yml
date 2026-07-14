@@ -15,6 +15,3 @@ jobs:
     with:
       deps: "parser json abnf railroad"
       build-order: "parser debug json abnf railroad"
-      # go/ exists but was not exercised by the old build.yml; preserved.
-      # Flip to true once the go tree is confirmed CI-clean.
-      run-go: false
