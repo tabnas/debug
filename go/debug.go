@@ -3,19 +3,26 @@
 // Package debug is the Go implementation of the tabnas Debug plugin.
 //
 // It mirrors the canonical TypeScript implementation in ../ts: a Debug
-// plugin that traces a parse, and a Describe function that dumps a
-// parser instance's active grammar (tokens, token sets, rules, alternates,
-// lexer matchers and plugins). The TypeScript version is authoritative.
+// plugin that traces a parse (with the TS trace kinds step, rule, lex,
+// parse, node and stack), a Describe function that dumps a parser
+// instance's active grammar (tokens, token sets, rules, alternates,
+// lexer matchers and plugins), a Model function returning the same
+// information as structured, JSON-serialisable data, an Abnf function
+// rendering the live grammar as ABNF, and a Use wrapper implementing the
+// TS `print` option (log USE: plus a describe dump on later plugin
+// loads). The TypeScript version is authoritative.
 //
 // The Go tabnas engine exposes tracing through instance subscribers
-// (Tabnas.Sub) rather than the TypeScript context-log hook, and its
-// introspection is read through exported accessors (Config, RSM,
-// TinName, TokenSet, Plugins). The output here therefore tracks the
-// TypeScript behaviour as closely as the Go engine API allows; see
-// ../docs/reference.md for the documented differences.
+// (Tabnas.Sub), parse-prepare hooks and rule-spec state actions rather
+// than the TypeScript context-log hook, and its introspection is read
+// through exported accessors (Config, RSM, TinName, TokenSet, Plugins).
+// The output here therefore tracks the TypeScript behaviour as closely
+// as the Go engine API allows; see ../docs/reference.md for the
+// documented differences.
 package tabnasdebug
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -32,9 +39,26 @@ const Version = "0.2.0"
 
 // Defaults are the option values used when the plugin is loaded without
 // an explicit configuration. They mirror the canonical TypeScript
-// DEFAULTS, where tracing is on by default.
+// DEFAULTS, where printing and tracing are on by default (a bare true
+// for trace enables every kind: step, rule, lex, parse, node, stack).
 var Defaults = map[string]any{
+	"print": true,
 	"trace": true,
+}
+
+// Decoration keys under which the plugin stores its per-instance state
+// (the Go analogue of the TS __debugUseWrapped guard and the options
+// closure): repeated plugin application updates the stored state instead
+// of stacking subscribers or wrappers.
+const (
+	traceDecoration = "debug$trace"
+	printDecoration = "debug$print"
+)
+
+// printState carries the print-option configuration for one instance:
+// the writer that receives the USE: log emitted by Use.
+type printState struct {
+	out io.Writer
 }
 
 // internalError converts a recovered panic value into an "internal"-code
@@ -52,22 +76,13 @@ func internalError(api string, r any) error {
 	}
 }
 
-// traceEnabled reports whether tracing should be installed for the given
-// options. It mirrors the canonical TypeScript handling of the `trace`
-// option, which accepts true | false | object:
-//
-//   - opts nil, or no "trace" key: fall back to Defaults["trace"].
-//   - an explicit false (bool or *bool): off.
-//   - any other non-nil value (true, a per-kind flag map/object): on.
-//
-// The Go engine surfaces only two event streams (token and rule), so a
-// per-kind object cannot select kinds the way TypeScript does; any
-// non-false trace value simply enables both streams.
-func traceEnabled(opts map[string]any) bool {
-	v, ok := opts["trace"]
+// printEnabled reports whether the `print` option is on. It mirrors the
+// canonical TypeScript handling: absent (or opts nil) falls back to
+// Defaults["print"]; an explicit false (bool or *bool) turns it off.
+func printEnabled(opts map[string]any) bool {
+	v, ok := opts["print"]
 	if !ok {
-		// Honour the package default when the option is absent.
-		v, ok = Defaults["trace"]
+		v, ok = Defaults["print"]
 		if !ok {
 			return false
 		}
@@ -80,58 +95,93 @@ func traceEnabled(opts map[string]any) bool {
 	case *bool:
 		return t != nil && *t
 	default:
-		// A non-false, non-nil value (e.g. a per-kind flag map) means "on".
 		return true
 	}
 }
 
 // Debug is the tabnas plugin entry point. Load it with
 //
-//	j.Use(debug.Debug, map[string]any{"trace": true})
+//	j.Use(tabnasdebug.Debug, map[string]any{"trace": true})
 //
-// and call debug.Describe(j) for a grammar dump. When tracing is enabled
-// (see traceEnabled) the plugin installs lex and rule subscribers that
-// log each parse event.
+// and call Describe(j) for a grammar dump, Model(j) for the same
+// information as structured data, or Abnf(j) for the grammar as ABNF.
 //
-// Trace output goes to os.Stdout by default; pass an io.Writer under
-// opts["out"] to capture it (e.g. for tests).
+// When tracing is enabled (see resolveTrace) the plugin installs the
+// trace streams mirroring the canonical TypeScript kinds — step, rule,
+// lex, parse, node and stack — each individually selectable via a
+// per-kind map under opts["trace"] (a bare true enables all kinds).
+//
+// When the print option is enabled (the default, mirroring TS), later
+// plugin loads made through this package's Use function log "USE:" plus
+// a full Describe dump; the Go engine's (*Tabnas).Use is a concrete
+// method and cannot be wrapped in place, so the wrapping the TS plugin
+// applies to tabnas.use lives in tabnasdebug.Use instead.
+//
+// Trace and print output goes to os.Stdout by default; pass an io.Writer
+// under opts["out"] to capture it (e.g. for tests).
 //
 // Loading via j.Use already runs under the engine's no-panic guard, but
 // Debug guards itself too so that calling it directly cannot panic the
 // caller: any panic while wiring trace subscribers is returned as an
 // "internal"-code error.
-var Debug tabnas.Plugin = func(j *tabnas.Tabnas, opts map[string]any) (err error) {
+func Debug(j *tabnas.Tabnas, opts map[string]any) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = internalError("Debug", r)
 		}
 	}()
 
-	if traceEnabled(opts) {
-		var out io.Writer = os.Stdout
-		if w, ok := opts["out"].(io.Writer); ok && w != nil {
-			out = w
-		}
-		addTrace(j, out)
+	var out io.Writer = os.Stdout
+	if w, ok := opts["out"].(io.Writer); ok && w != nil {
+		out = w
+	}
+
+	// The print option state is stored as a decoration so Use can find
+	// it; the latest application's setting wins (an explicit print:false
+	// clears it), mirroring the TS wrapper reading its options object.
+	if printEnabled(opts) {
+		j.Decorate(printDecoration, &printState{out: out})
+	} else {
+		j.Decorate(printDecoration, (*printState)(nil))
+	}
+
+	if on, kinds := resolveTrace(opts); on {
+		installTrace(j, out, kinds)
 	}
 	return nil
 }
 
-// addTrace installs the lex and rule subscribers that emit trace lines to
-// out. The Go engine surfaces two event streams (token and rule); the
-// canonical TypeScript plugin's finer kinds (step, parse, node, stack)
-// have no Go engine equivalent and are not emitted here.
-func addTrace(j *tabnas.Tabnas, out io.Writer) {
-	j.Sub(
-		func(tkn *tabnas.Token, rule *tabnas.Rule, ctx *tabnas.Context) {
-			fmt.Fprintf(out, "[lex]  %-6s tin=%d src=%q val=%v at %d:%d\n",
-				tkn.Name, tkn.Tin, tkn.Src, tkn.Val, tkn.RI, tkn.CI)
-		},
-		func(rule *tabnas.Rule, ctx *tabnas.Context) {
-			fmt.Fprintf(out, "[rule] %s~%d:%s d=%d node=%v\n",
-				rule.Name, rule.I, rule.State, rule.D, ctx.F(rule.Node))
-		},
-	)
+// Use loads a plugin onto an instance exactly as (*tabnas.Tabnas).Use
+// does and, when the Debug plugin's print option is active on that
+// instance, logs "USE: <plugin name>" followed by the full Describe dump
+// — the Go counterpart of the canonical TypeScript plugin's use()
+// wrapper. The TS plugin can reassign tabnas.use in place; the Go
+// engine's Use is a concrete method, so the wrapped form is exposed here
+// as a package function instead (see ../docs/reference.md).
+//
+// The plugin load error, if any, is returned unchanged and suppresses
+// the log (matching TS, where a throwing use() never reaches the log).
+// Like the engine, Use upholds the no-panic guarantee: a panic while
+// describing is returned as an "internal"-code error.
+func Use(j *tabnas.Tabnas, plugin tabnas.Plugin, opts ...map[string]any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = internalError("Use", r)
+		}
+	}()
+
+	if err := j.Use(plugin, opts...); err != nil {
+		return err
+	}
+
+	if ps, ok := j.Decoration(printDecoration).(*printState); ok && ps != nil {
+		desc, derr := Describe(j)
+		if derr != nil {
+			return derr
+		}
+		fmt.Fprintf(ps.out, "USE: %s\n\n%s\n", pluginName(plugin), desc)
+	}
+	return nil
 }
 
 // Describe returns a human-readable description of a parser instance's
@@ -320,8 +370,19 @@ func describeRules(j *tabnas.Tabnas) string {
 // alternate in the named phase. Function-valued targets render as "<F>".
 // Mirrors ruleTreeStep() in debug.ts.
 func ruleTreeStep(rs *tabnas.RuleSpec, phase, step string) string {
+	return strings.Join(ruleEdgeTargets(rs, phase, step), " ")
+}
+
+// ruleEdgeTargets returns the distinct push ("p") or replace ("r")
+// rule-name targets of one phase's alternates, in alternate order, with
+// function-valued (PF/RF) targets recorded as "<F>". It is the
+// structured core shared by ruleTreeStep (Describe) and modelGraph
+// (Model, which renames "<F>" to the TS model form "<fn>"); the TS
+// counterpart is ruleEdges().
+func ruleEdgeTargets(rs *tabnas.RuleSpec, phase, step string) []string {
+	targets := []string{}
 	if rs == nil {
-		return ""
+		return targets
 	}
 	var alts []*tabnas.AltSpec
 	if phase == "open" {
@@ -331,7 +392,6 @@ func ruleTreeStep(rs *tabnas.RuleSpec, phase, step string) string {
 	}
 
 	seen := make(map[string]bool)
-	var targets []string
 	for _, a := range alts {
 		if a == nil {
 			continue
@@ -357,7 +417,7 @@ func ruleTreeStep(rs *tabnas.RuleSpec, phase, step string) string {
 		seen[name] = true
 		targets = append(targets, name)
 	}
-	return strings.Join(targets, " ")
+	return targets
 }
 
 // describeAlts renders every open and close alternate of every rule,
@@ -562,10 +622,39 @@ func describeConfig(cfg *tabnas.LexConfig) string {
 	}, "\n")
 }
 
-// describePlugins reports the loaded plugin count. The Go engine stores
-// plugins as bare functions, so individual names are not recoverable.
+// describePlugins lists the loaded plugins by name (derived from the
+// plugin function's symbol — the Go engine stores plugins as bare
+// functions) plus any options registered in the instance's
+// plugin-options namespace, mirroring the canonical TypeScript
+// describe()'s PLUGIN section (name + JSON-rendered option entries).
 func describePlugins(j *tabnas.Tabnas) string {
-	return fmt.Sprintf("  plugins: %d", len(j.Plugins()))
+	entries := make([]string, 0)
+	for _, p := range j.Plugins() {
+		name := pluginName(p)
+		s := name
+		if opts := j.PluginOptions(name); opts != nil {
+			keys := make([]string, 0, len(opts))
+			for k := range opts {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				s += "\n    " + k + ": " + jsonStr(opts[k])
+			}
+		}
+		entries = append(entries, s)
+	}
+	return "  " + strings.Join(entries, "\n  ")
+}
+
+// jsonStr renders a value as compact JSON for the PLUGIN section,
+// falling back to fmt formatting for unmarshalable values (funcs etc.).
+func jsonStr(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(b)
 }
 
 // emitAbnf renders an ABNF representation of the instance's *live*

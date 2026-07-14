@@ -5,16 +5,19 @@ Debug / introspection plugin for the
 `tabnasdebug`.
 
 It makes a grammar *visible*: `Describe` dumps an instance's installed
-grammar (tokens, rules, plugins) as labelled text, `Abnf` re-expresses it
-as ABNF, and `trace` logs a parse step by step. A dev/test aid — never a
-runtime dependency.
+grammar (tokens, rules, plugins) as labelled text, `Model` returns the
+same information as structured, JSON-serialisable data, `Abnf`
+re-expresses it as ABNF, and `trace` logs a parse step by step (the
+TypeScript trace kinds `step`, `rule`, `lex`, `parse`, `node`, `stack`).
+A dev/test aid — never a runtime dependency.
 
 This is the Go port of the canonical TypeScript implementation in
 [`../ts`](../ts); the TypeScript version is authoritative and this package
 tracks it. The Go engine exposes tracing and introspection through
-different idioms, so the surface differs in shape — notably, Go has no
-structured `model()`. See [the concepts doc](doc/concepts.md) and
-[reference](doc/reference.md) for the details.
+different idioms, so the surface differs in shape — package functions
+returning errors instead of instance methods, and a `tabnasdebug.Use`
+wrapper for the `print` option. See [the concepts doc](doc/concepts.md)
+and [reference](doc/reference.md) for the details.
 
 ## Install
 

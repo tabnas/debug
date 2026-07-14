@@ -172,20 +172,25 @@ func main() {
 		panic(err)
 	}
 	fmt.Print(buf.String())
-	// [rule] val~0:o d=0 node=null
-	// [rule] add~1:o d=1 node=null
-	// [lex]  #NR    tin=8 src="1" val=1 at 1:1
-	// [rule] add~1:c d=1 node=null
-	// [lex]  #PL    tin=18 src="+" val=<nil> at 1:2
+	// ========= TRACE ==========
+	//   step   0:
+	//   stack  1+2 ...
+	//   rule   1+2 ... val~0:OPEN  prev=-1 parent=-1 child=-1
+	//   lex    +2  ... #NR  1  0  1:1
+	//   parse  ...     alt  ...
+	//   node   ...     why=O <...>
 	// ... and so on
 }
 ```
 
-The Go engine surfaces two event streams: `[lex]` lines (one per token —
-name, tin, source, value, row:col) and `[rule]` lines (one per rule
-opening `o` or closing `c` — name, instance, state, depth, node). Read
-them top to bottom to watch the parser descend into the input and come
-back out.
+The trace mirrors the TypeScript kinds: `step` (loop counter), `stack`
+(the rule stack and partial nodes), `rule` (a rule opening or closing),
+`lex` (one line per token), `parse` (the alternate match result) and
+`node` (the node built so far). Most lines lead with the upcoming source,
+the token window and the parse depth. Read them top to bottom to watch
+the parser descend into the input and come back out. Pass a per-kind map
+under `"trace"` to select individual streams — see the
+[guide](guide.md).
 
 ## What you have learned
 

@@ -45,11 +45,12 @@ func buildTreeGrammar(t *testing.T) *tabnas.Tabnas {
 	return j
 }
 
-// TestLoads checks that the plugin value is present, mirroring the
-// "loads" case in ../ts/test/debug.test.js.
+// TestLoads checks that the plugin loads onto a fresh instance without
+// error, mirroring the "loads" case in ../ts/test/debug.test.js.
 func TestLoads(t *testing.T) {
-	if tabnasdebug.Debug == nil {
-		t.Fatal("tabnasdebug.Debug is nil")
+	j := tabnas.Make()
+	if err := j.Use(tabnasdebug.Debug, map[string]any{"print": false, "trace": false}); err != nil {
+		t.Fatalf("Use(Debug) returned error: %v", err)
 	}
 }
 
@@ -97,11 +98,14 @@ func TestTraceEnables(t *testing.T) {
 	}
 }
 
-// TestDefaults checks that tracing is on by default, keeping the Go
-// defaults in step with the canonical TypeScript DEFAULTS.
+// TestDefaults checks that printing and tracing are on by default,
+// keeping the Go defaults in step with the canonical TypeScript DEFAULTS.
 func TestDefaults(t *testing.T) {
 	if trace, ok := tabnasdebug.Defaults["trace"].(bool); !ok || !trace {
 		t.Error(`Defaults["trace"] should be true`)
+	}
+	if print, ok := tabnasdebug.Defaults["print"].(bool); !ok || !print {
+		t.Error(`Defaults["print"] should be true`)
 	}
 }
 
@@ -194,19 +198,91 @@ func TestTraceContentCaptured(t *testing.T) {
 	if out == "" {
 		t.Fatal("trace produced no captured output")
 	}
-	if !strings.Contains(out, "[rule]") {
-		t.Errorf("captured trace missing rule lines:\n%s", out)
+	if !strings.Contains(out, "========= TRACE ==========") {
+		t.Errorf("captured trace missing the TRACE banner:\n%s", out)
 	}
-	if !strings.Contains(out, "[lex]") {
-		t.Errorf("captured trace missing lex lines:\n%s", out)
+	// Every TS trace kind must have a Go counterpart stream.
+	for _, kind := range []string{"  step ", "  stack", "  rule ", "  lex  ", "  parse", "  node "} {
+		if !strings.Contains(out, kind) {
+			t.Errorf("captured trace missing %q lines:\n%s", strings.TrimSpace(kind), out)
+		}
 	}
-	// The rule subscriber should name the rules that ran, including the
+	// The rule stream should name the rules that ran, including the
 	// pushed single-character rule x.
 	if !strings.Contains(out, "top~") {
 		t.Errorf("captured trace missing the top rule:\n%s", out)
 	}
 	if !strings.Contains(out, "x~") {
 		t.Errorf("captured trace missing the pushed rule x:\n%s", out)
+	}
+}
+
+// TestTraceHonoursPerKindFlags checks the granular trace kinds, mirroring
+// the TypeScript "honours per-kind trace flags (rule on, lex off)" case:
+// with only the rule kind enabled, rule lines appear and every other
+// stream is suppressed.
+func TestTraceHonoursPerKindFlags(t *testing.T) {
+	var buf bytes.Buffer
+	j := buildTreeGrammar(t)
+	err := j.Use(tabnasdebug.Debug, map[string]any{
+		"print": false,
+		"out":   &buf,
+		"trace": map[string]any{
+			"rule":  true,
+			"lex":   false,
+			"parse": false,
+			"node":  false,
+			"stack": false,
+			"step":  false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Use with per-kind trace returned error: %v", err)
+	}
+	if _, err := j.Parse("ax"); err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "  rule ") {
+		t.Errorf("rule trace lines should appear:\n%s", out)
+	}
+	for _, kind := range []string{"  lex  ", "  parse", "  node ", "  stack", "  step "} {
+		if strings.Contains(out, kind) {
+			t.Errorf("%q trace lines should be suppressed:\n%s", strings.TrimSpace(kind), out)
+		}
+	}
+}
+
+// TestTracePartialKindMapKeepsOthersOn checks that a partial per-kind map
+// merges over the all-true defaults (a partial object cannot turn other
+// kinds off implicitly), mirroring the engine-side deep-merge of
+// Debug.defaults in TypeScript.
+func TestTracePartialKindMapKeepsOthersOn(t *testing.T) {
+	var buf bytes.Buffer
+	j := buildTreeGrammar(t)
+	err := j.Use(tabnasdebug.Debug, map[string]any{
+		"print": false,
+		"out":   &buf,
+		// Only lex is mentioned (off); every other kind stays on.
+		"trace": map[string]any{"lex": false},
+	})
+	if err != nil {
+		t.Fatalf("Use with partial trace map returned error: %v", err)
+	}
+	if _, err := j.Parse("ax"); err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "  lex  ") {
+		t.Errorf("lex trace lines should be suppressed:\n%s", out)
+	}
+	for _, kind := range []string{"  rule ", "  parse", "  node ", "  stack", "  step "} {
+		if !strings.Contains(out, kind) {
+			t.Errorf("%q trace lines should stay on with a partial map:\n%s",
+				strings.TrimSpace(kind), out)
+		}
 	}
 }
 

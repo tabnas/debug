@@ -27,8 +27,10 @@ typeof tn.debug.describe()  // => 'string'
 | [`go/`](go/) | Go (`github.com/tabnas/debug/go`, package `tabnasdebug`). Tracks `ts/`. |
 
 The TypeScript implementation is the source of truth; the Go port mirrors
-its behaviour as far as the Go engine API allows (notably, Go has no
-structured `model()`).
+its behaviour — including the structured `Model`, the granular trace
+kinds, and the `print` option (as `tabnasdebug.Use`) — as far as the Go
+engine API allows. The remaining shape differences are documented in
+[`docs/reference.md`](docs/reference.md).
 
 ## Documentation
 

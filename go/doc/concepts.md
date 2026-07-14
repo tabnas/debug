@@ -18,21 +18,26 @@ grammar you ship does not need it to parse — only to inspect or describe.
 ## The engine relationship
 
 The package is a thin reader over the live `*tabnas.Tabnas` engine. Its
-two text functions read the instance's exported accessors and format the
-result:
+inspection functions read the instance's exported accessors and format
+the result:
 
 - `Describe(j)` reads `j.Config()`, `j.RSM()`, `j.TokenSet(...)`,
   `j.Plugins()` and formats them as labelled text.
+- `Model(j)` reads the same state and returns it as typed,
+  JSON-serialisable data (`*DebugModel`).
 - `Abnf(j)` reads the same config and rule specs and re-expresses the
   grammar as ABNF.
 
-Neither parses anything or mutates the grammar; both are pure projections
-of the engine's current state, taken when you call them.
+None of them parses anything or mutates the grammar; all are pure
+projections of the engine's current state, taken when you call them.
 
 Tracing is the one part that hooks the runtime: with `trace` enabled, the
-plugin installs two engine subscribers via `j.Sub` — a token subscriber
-(`[lex]`) and a rule subscriber (`[rule]`) — and formats each event to the
-configured writer.
+plugin installs a token subscriber and a rule subscriber via `j.Sub`
+(driving the `lex`, and the `step` / `stack` / `rule`, streams), a
+parse-prepare hook that prints the TRACE banner, and after-open /
+after-close rule state actions that drive the `parse` and `node`
+streams — together covering all six TypeScript trace kinds. Each event
+is formatted to the configured writer.
 
 ## The no-panic guarantee
 
@@ -73,41 +78,46 @@ port tracks it as far as the Go engine API allows. The differences below
 are imposed by that API, not by choice, and are also recorded in the
 project's combined `docs/reference.md`.
 
-1. **No structured `model()`.** The biggest difference. The TypeScript
-   port exposes `model()`, returning the whole grammar as a typed,
-   JSON-serialisable object (tokens, rules, the rule-reference graph,
-   config, plugins, ABNF) so a test or tool can consume the grammar as
-   data. The Go engine's introspection API does not support an equivalent
-   typed projection, so the Go package offers only the text forms,
-   `Describe` and `Abnf`. In Go you assert on the `Describe` text.
-
-2. **Functions, not methods, and `(string, error)`.** TypeScript attaches
+1. **Functions, not methods, and error returns.** TypeScript attaches
    `describe()` / `model()` / `abnf()` to the instance as methods that
-   return bare strings/objects. Go exposes `Describe(j)` and `Abnf(j)` as
-   package functions taking the instance, returning `(string, error)` to
-   uphold the no-panic guarantee.
+   return bare strings/objects. Go exposes `Describe(j)`, `Model(j)` and
+   `Abnf(j)` as package functions taking the instance, returning
+   `(value, error)` to uphold the no-panic guarantee.
 
-3. **No `print` option.** The TypeScript plugin wraps `use()` to print a
-   description after each later `use()`. The Go engine exposes no `use`
-   hook to wrap, so the `print` behaviour is absent.
+2. **`print` lives in `tabnasdebug.Use`.** The TypeScript plugin wraps
+   the instance's `use()` in place so every later plugin load prints
+   `USE:` plus a description. The Go engine's `(*Tabnas).Use` is a
+   concrete method that cannot be reassigned, so the wrapped form is the
+   package function `tabnasdebug.Use(j, plugin, opts...)`: it delegates
+   to `j.Use` and, when the instance's `print` option is active, logs the
+   `USE:` line and the `Describe` dump.
 
-4. **Two trace kinds, not six.** The Go engine's `Sub` API surfaces only
-   token (`lex`) and rule streams. The finer TypeScript kinds (`step`,
-   `parse`, `node`, `stack`) have no Go equivalent. A per-kind trace
-   object is accepted but simply turns both streams on.
+3. **Trace kinds are synthesised from three engine hooks.** All six
+   TypeScript kinds (`step`, `rule`, `lex`, `parse`, `node`, `stack`)
+   have Go streams, but the TS engine drives them from a single `ctx.log`
+   callback while the Go engine offers no such callback. The Go plugin
+   instead combines the rule subscriber (`step`, `stack`, `rule` — fired
+   at the same pre-step point the TS engine logs them), the lex
+   subscriber (`lex`), and after-open/after-close rule state actions
+   installed at parse start (`parse`, `node` — the closest post-match
+   hook). Two shape gaps remain: `parse` lines say `alt` / `no-alt`
+   without the TS alt *index* (the engine does not expose which alternate
+   matched), and `lex` lines omit the matcher name.
 
-5. **Trace destination.** TypeScript logs to the instance's console
+4. **Trace destination.** TypeScript logs to the instance's console
    provider (`get_console()`); Go writes to `opts["out"]` (an
    `io.Writer`), defaulting to `os.Stdout`, so trace output is captured in
    tests via a `bytes.Buffer` rather than a fake console.
 
-6. **Summarised `LEXER` and `PLUGIN` sections.** The Go engine exposes
-   only custom lexer matchers (the built-in matchers are not enumerable;
-   their enable flags appear under `CONFIG`) and stores plugins as bare
-   functions (so the `PLUGIN` section reports a count, not per-plugin names
-   and options).
+5. **Summarised `LEXER` section; symbol-derived plugin names.** The Go
+   engine exposes only custom lexer matchers (the built-in matchers are
+   not enumerable; their enable flags appear under `CONFIG`). Plugins are
+   stored as bare functions, so the `PLUGIN` section and
+   `Model(...).Plugins` derive each name from the function's symbol (the
+   Go analogue of the TS function `name`), and per-plugin options appear
+   only when registered via `Tabnas.SetPluginOptions`.
 
-7. **Deterministic token ordering.** The Go engine exposes token sets and
+6. **Deterministic token ordering.** The Go engine exposes token sets and
    custom token names through Go maps, which do not preserve insertion
    order. The Go port orders tokens and members by tin (built-ins in their
    canonical order, then custom tins ascending) so the output is

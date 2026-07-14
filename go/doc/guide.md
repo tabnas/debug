@@ -31,9 +31,8 @@ The sections, in order, are `INSTANCE`, `TOKENS`, `RULES`, `ALTS`,
 
 ## Assert on a section
 
-`Describe` returns text, so assert on a header or a known row. (Unlike the
-TypeScript port there is no `model()` — see [concepts](concepts.md) — so
-in Go you read the text.)
+`Describe` returns text, so assert on a header or a known row. (For
+structured assertions, use `Model` — see below.)
 
 ```go
 report, _ := tabnasdebug.Describe(j)
@@ -59,6 +58,38 @@ func sectionOf(report, start, end string) string {
 }
 
 rules := sectionOf(report, "========= RULES =========", "========= ALTS =========")
+```
+
+## Consume the grammar as data
+
+`Model` returns the same information as a typed, JSON-serialisable
+`*DebugModel` — the Go counterpart of the TypeScript `model()` — so tests
+and tools can assert on structure instead of text:
+
+```go
+m, err := tabnasdebug.Model(j)
+if err != nil {
+	t.Fatal(err)
+}
+
+for _, edges := range m.Graph {
+	if edges.Name == "val" {
+		fmt.Println(edges.OpenPush) // e.g. [map list]
+	}
+}
+
+data, _ := json.Marshal(m) // the grammar portion round-trips
+```
+
+## Log a description on later plugin loads (the print option)
+
+With `print` on (the default), load later plugins through
+`tabnasdebug.Use` and each load logs `USE: <name>` plus the full
+`Describe` dump — the Go form of the TS `use()` wrapping:
+
+```go
+j.Use(tabnasdebug.Debug, map[string]any{"print": true, "trace": false})
+tabnasdebug.Use(j, myPlugin, nil) // logs USE: myPlugin + the dump
 ```
 
 ## Render a grammar as ABNF
@@ -111,31 +142,39 @@ if _, err := j.Parse("1+2"); err != nil {
 }
 
 out := buf.String()
-if !strings.Contains(out, "[rule]") {
+if !strings.Contains(out, "  rule ") {
 	t.Error("expected rule trace lines")
 }
-if !strings.Contains(out, "[lex]") {
+if !strings.Contains(out, "  lex  ") {
 	t.Error("expected lex trace lines")
 }
 ```
 
-The Go engine surfaces two streams: `[lex]` lines (token name, tin,
-source, value, row:col) and `[rule]` lines (rule name, instance, state,
-depth, node). The finer TypeScript kinds (`step`, `parse`, `node`,
-`stack`) are not available in the Go engine — see [concepts](concepts.md).
+All six TypeScript trace kinds have Go streams — `step`, `rule`, `lex`,
+`parse`, `node`, `stack` — each with a matching line prefix (`  rule `,
+`  lex  `, …). See the [reference](reference.md) for the line formats and
+[concepts](concepts.md) for how they map onto the engine's hooks.
+
+## Select individual trace kinds
+
+Pass a per-kind map (the TypeScript shape). It merges over the all-true
+defaults, so turn unwanted kinds off explicitly:
+
+```go
+j.Use(tabnasdebug.Debug, map[string]any{"trace": map[string]any{
+	"rule": true,
+	"lex":  false, "parse": false, "node": false, "stack": false, "step": false,
+}})
+```
 
 ## Disable tracing
 
 `trace` defaults to on (`Defaults["trace"]` is `true`). Pass an explicit
-`false` to attach the plugin without installing trace subscribers:
+`false` to attach the plugin without installing trace streams:
 
 ```go
 j.Use(tabnasdebug.Debug, map[string]any{"trace": false})
 ```
-
-A per-kind object (the TypeScript shape) is accepted but, because the Go
-engine exposes only two streams, any non-`false` value simply turns both
-streams on; it cannot select individual kinds.
 
 ## Handle the error returns
 

@@ -32,22 +32,28 @@ The plugin offers two things you can take separately:
    runs. Reach for it when you want to know *what the parser did on this
    input*.
 
-In TypeScript a third feature, **printing**, wraps `use` to dump the
-grammar after each plugin load. The Go engine exposes no such hook, so
-the Go plugin omits it; call `Describe` on demand instead.
+A third feature, **printing**, dumps the grammar after each later plugin
+load. In TypeScript the plugin wraps the instance's `use` in place; the
+Go engine's `Use` is a concrete method that cannot be reassigned, so the
+Go plugin exposes the wrapped form as the package function
+`debug.Use(j, plugin, opts...)` — later loads made through it print the
+`USE:` line and the grammar dump.
 
 ## How tracing is installed
 
 Tracing is wired when the plugin loads, not toggled per parse — so enable
-it on the instance you intend to trace.
+it on the instance you intend to trace. Both runtimes emit the same six
+kinds: `step`, `rule`, `lex`, `parse`, `node`, `stack`.
 
 - **TypeScript** registers a parse-prepare hook that installs a logging
   function the parser calls at each event, and filters by kind before
-  formatting a line. That is why filtering is cheap and why the finer
-  kinds (`step`, `parse`, `node`, `stack`) exist.
-- **Go** subscribes to the engine's two event streams via `Tabnas.Sub`:
-  one for tokens (`lex`) and one for rules. The engine surfaces exactly
-  these two, which is why the Go trace has two kinds rather than six.
+  formatting a line. That is why filtering is cheap.
+- **Go** combines three engine hooks: the `Tabnas.Sub` subscribers (the
+  token stream drives `lex`; the rule stream drives `step`, `stack` and
+  `rule`), a parse-prepare hook that prints the TRACE banner, and
+  after-open/after-close rule state actions installed at parse start
+  (driving `parse` and `node`). Filtering by kind happens before
+  formatting, as in TypeScript.
 
 ## Why the output format is fixed and shared
 
@@ -61,9 +67,10 @@ The format is part of the contract, not an accident of printing.
 The TypeScript implementation is the source of truth. The Go port exists
 to make the same debugging available to Go users, and it tracks the
 TypeScript behaviour rather than evolving on its own. Where the two
-engines genuinely differ — Go's two trace kinds, its lack of a `print`
-hook, its summarised `LEXER`/`PLUGIN` sections — the gaps are a
+engines genuinely differ — Go's `debug.Use` form of the `print` option,
+its `parse` lines without an alt index, its summarised `LEXER` section
+and symbol-derived plugin names — the gaps are a
 consequence of the engine APIs, and they are written down in the
-[reference](reference.md#documented-differences-go-vs-canonical-typescript)
+[reference](reference.md#parity-and-remaining-differences-go-vs-canonical-typescript)
 rather than left implicit. When behaviour could drift, TypeScript decides
 and Go follows.

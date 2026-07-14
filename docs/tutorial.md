@@ -104,11 +104,11 @@ j.Use(debug.Debug, map[string]any{"trace": true})
 j.Parse("a:1")
 ```
 
-Run it. You will see one line per parse event. In TypeScript these are
-tagged `lex`, `rule`, `parse`, `node` and `stack`; in Go you get `[lex]`
-lines (each token produced) and `[rule]` lines (each rule opening and
-closing). Each line shows where in the source the parser is and what it
-decided.
+Run it. You will see one line per parse event, tagged by kind in both
+runtimes: `step`, `stack`, `rule` (each rule opening and closing), `lex`
+(each token produced), `parse` (the alternate match result) and `node`
+(the node built so far). Each line shows where in the source the parser
+is and what it decided.
 
 ## 4. Read one trace line
 

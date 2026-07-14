@@ -40,33 +40,36 @@ kind → boolean (only the listed kinds). The kinds are `step`, `rule`,
 
 | Key | Type | Meaning |
 |---|---|---|
-| `"trace"` | `true` / `false` / object (any non-`false` value) / absent | Enable parse tracing (lex + rule events). |
-| `"out"` | `io.Writer` | Where trace output is written. Defaults to `os.Stdout`. |
+| `"print"` | `true` / `false` / `*bool` / absent | Log `USE:` plus the full `Describe` dump when a later plugin is loaded via `debug.Use`. |
+| `"trace"` | `true` / `false` / `*bool` / per-kind map / absent | Which parse events to log. |
+| `"out"` | `io.Writer` | Where trace and print output is written. Defaults to `os.Stdout`. |
 
 The `trace` option mirrors the canonical TypeScript `true | false | object`
-handling: an explicit `false` (or `*bool` false) disables tracing; any
-other non-`nil` value (`true`, or a per-kind flag object) enables it; and
-when the key is **absent** (or `opts` is `nil`) the value falls back to
-`Defaults["trace"]` (i.e. on). Because the Go engine surfaces only two
-event streams, a per-kind object cannot select individual kinds — it
-simply turns both streams on.
+handling: an explicit `false` (or `*bool` false) disables tracing; `true`
+enables every kind; a per-kind map (`map[string]any` or
+`map[string]bool`) enables tracing with the map merged over the all-true
+defaults — a partial map cannot turn other kinds off implicitly (set them
+`false` explicitly), matching the TS engine-side deep-merge of
+`Debug.defaults`; and when the key is **absent** (or `opts` is `nil`) the
+value falls back to `Defaults["trace"]` (i.e. on). The kinds are the
+TypeScript six: `step`, `rule`, `lex`, `parse`, `node`, `stack`.
 
-The Go engine drives tracing through instance subscribers
-(`Tabnas.Sub`), which expose two event streams — token (`lex`) and rule.
-The finer TypeScript kinds (`step`, `parse`, `node`, `stack`) and the
-`print` behaviour (which wraps `use`) have no equivalent in the Go engine
-API and are intentionally absent.
+The `print` behaviour is exposed as the package function
+`debug.Use(j, plugin, opts...)`: the Go engine's `(*Tabnas).Use` is a
+concrete method that cannot be wrapped in place (the TS plugin reassigns
+`tabnas.use`), so later plugin loads must go through `debug.Use` to get
+the `USE:` log.
 
 Trace output is capturable: pass any `io.Writer` under `opts["out"]` and
-the subscribers write there via `fmt.Fprintf` instead of `os.Stdout`.
+the trace streams write there instead of `os.Stdout`.
 
 ## Defaults
 
 | | TypeScript | Go |
 |---|---|---|
 | symbol | `Debug.defaults` | `debug.Defaults` (a `map[string]any`) |
-| `print` / — | `true` | n/a |
-| `trace` | all kinds `true` | `true` |
+| `print` | `true` | `true` |
+| `trace` | all kinds `true` | `true` (all kinds) |
 
 ## Describing a grammar
 
@@ -94,52 +97,85 @@ exact headers:
 | `========= ALTS =========` | Each rule's open and close alternates: token sequence, push (`p`), replace (`r`), backtrack (`b`), counters (`n`), group (`g`), the action/condition/modifier presence flags (`A`/`C`/`H`), and the declarative condition (`CD`). Function-valued push/replace render as `p=<F>` / `r=<F>`. Per-position multi-token sets render as `[a,b]`, a single token bare. |
 | `========= LEXER =========` | Lexer matchers. TS lists every matcher; Go lists only the custom matchers its public API exposes (the built-in enable flags are reported under `CONFIG`). |
 | `========= CONFIG ========` | Key parser settings: rule `start`, `finish`, `safeKey`, and the built-in lex enable flags (`lex.fixed`, `lex.space`, `lex.line`, `lex.text`, `lex.number`, `lex.comment`, `lex.string`, `lex.value`). |
-| `========= PLUGIN =========` | Loaded plugins. TS lists each plugin and its options; Go reports the plugin count (the Go engine stores plugins as bare functions). |
+| `========= PLUGIN =========` | Loaded plugins. TS lists each plugin and its options; Go lists each plugin by its function symbol name, plus options registered via `Tabnas.SetPluginOptions`. |
 
 Section headers are identical across both implementations so output can
 be diffed.
 
+## Structured model
+
+| Language | Form |
+|---|---|
+| TypeScript | `tn.debug.model()` — returns `DebugModel` |
+| Go | `debug.Model(j)` — returns `(*DebugModel, error)` |
+
+Both return the same information as `describe()` / `Describe` as a
+typed, JSON-serialisable object: the token table (`tokens`), token sets
+(`tokenSets`), rules and alternates as data (`rules`), the
+rule-reference graph (`graph`), lexer matchers (`lexer`), key config
+(`config`), plugins (`plugins`) and the ABNF text (`abnf`). Both
+runtimes export the full type set: `DebugModel`, `DebugTokenInfo`,
+`DebugTokenSet`, `DebugAltInfo`, `DebugRuleInfo`, `DebugRuleEdges`,
+`DebugLexMatcher`, `DebugConfigInfo`, `DebugPluginInfo` — the Go structs
+carry JSON tags matching the TS field names, so serialised output is
+comparable across runtimes.
+
+A nil/null alternate renders as the seq entry `***INVALID***` in both. A
+function-valued push/replace target is `"<fn>"`. The Go `Back` field
+omits an explicit `b: 0` (Go zero-value semantics), and Go rule/token
+ordering is deterministic (rules by name, tokens by tin) rather than TS
+insertion order.
+
 ## Trace output
 
 Under tracing, each event prints one line to the instance's console
-(TypeScript) or to `opts["out"]` / `os.Stdout` (Go).
+(TypeScript) or to `opts["out"]` / `os.Stdout` (Go). Both runtimes begin
+each parse with a `========= TRACE ==========` banner and log the enabled
+kinds (`step`, `rule`, `lex`, `parse`, `node`, `stack`); most lines lead
+with the parse state — upcoming source, the token window
+`[t0 t1]~[tin0 tin1]`, and the parse depth.
 
-- **TypeScript** logs the enabled kinds (`step`, `rule`, `lex`, `parse`,
-  `node`, `stack`); most lines lead with the parse state — upcoming
-  source, the token window `[t0 t1]~[tin0 tin1]`, and the parse depth.
-- **Go** logs two kinds: `[lex]` lines (token name, tin, source, value,
-  row:col) and `[rule]` lines (rule name, instance, state, depth, node).
-  Output goes to the `io.Writer` passed as `opts["out"]`, defaulting to
-  `os.Stdout`, so it can be captured (e.g. in tests).
+Go derives the streams from the engine's hooks (rule/lex subscribers, a
+parse-prepare hook, and after-open/after-close rule state actions); the
+`parse` lines say `alt` / `no-alt` without the TS alt index, and `lex`
+lines omit the matcher name, because the Go engine does not expose them.
 
 ## Parity and remaining differences (Go vs. canonical TypeScript)
 
-The Go port now closes most of the prior gaps. The `TOKENS` token-set
-sub-block, the `RULES` op/or/cp/cr transition tree (including
-single-character rule names and function-valued `<F>` targets), the
-`ALTS` `A`/`C`/`H` presence flags, declarative-condition (`CD`) rendering,
-function-valued push/replace (`p=<F>` / `r=<F>`), and per-position
-multi-token sets all mirror `debug.ts`. Tracing is configurable
-(`true | false | object | absent`, honouring `Defaults["trace"]`) and
-capturable (`opts["out"]`).
+The Go port now closes most of the prior gaps. The structured `Model`
+(with all nine `Debug*` types), the `print` option (via `debug.Use`),
+the six granular trace kinds, the `TOKENS` token-set sub-block, the
+`RULES` op/or/cp/cr transition tree (including single-character rule
+names and function-valued `<F>` targets), the `ALTS` `A`/`C`/`H`
+presence flags, declarative-condition (`CD`) rendering, function-valued
+push/replace (`p=<F>` / `r=<F>`), and per-position multi-token sets all
+mirror `debug.ts`. Tracing is configurable
+(`true | false | per-kind map | absent`, honouring `Defaults["trace"]`)
+and capturable (`opts["out"]`).
 
 The remaining differences are imposed by the Go engine's public API:
 
-1. **Tracing kinds.** Go emits `lex` and `rule` only; the finer TypeScript
-   kinds (`step`, `parse`, `node`, `stack`) are not surfaced by the engine
-   `Sub` API. A per-kind trace object therefore just turns both streams on
-   rather than selecting individual kinds.
-2. **No `print` option in Go** (the engine does not expose a `use` hook to
-   describe after each `use`).
-3. **`Describe` is a package function** in Go, a method in TypeScript, and
-   returns `(string, error)`: it upholds the engine's no-panic guarantee,
-   surfacing any internal failure as an `"internal"`-code error (with an
-   empty string) instead of panicking. Malformed specs (nil config, nil
-   rule spec, nil alternate) render defensively (`***INVALID***`).
-4. **`LEXER` and `PLUGIN` sections are summarised** in Go: the engine
-   exposes only custom lexer matchers (built-in enable flags appear under
-   `CONFIG`) and stores plugins as bare functions, so the plugin count is
-   reported rather than per-plugin names and options.
+1. **Trace detail.** All six kinds are emitted, but Go `parse` lines
+   carry `alt` / `no-alt` without the TS alt *index* (the engine does not
+   expose which alternate matched), and `lex` lines omit the matcher
+   name. The `parse`/`node` streams fire from after-open/after-close rule
+   state actions installed at parse start, the closest hook to the TS
+   engine's post-match log points.
+2. **`print` requires `debug.Use`.** The Go engine's `(*Tabnas).Use` is a
+   concrete method that cannot be reassigned, so the TS `use()` wrapping
+   is exposed as the package function `debug.Use(j, plugin, opts...)`;
+   plugins loaded directly via `j.Use` do not trigger the `USE:` log.
+3. **`Describe` / `Model` / `Abnf` are package functions** in Go, methods
+   in TypeScript, and return `(value, error)`: they uphold the engine's
+   no-panic guarantee, surfacing any internal failure as an
+   `"internal"`-code error instead of panicking. Malformed specs (nil
+   config, nil rule spec, nil alternate) render defensively
+   (`***INVALID***`).
+4. **`LEXER` section is summarised; plugin names are symbol-derived.**
+   The engine exposes only custom lexer matchers (built-in enable flags
+   appear under `CONFIG`) and stores plugins as bare functions, so plugin
+   names come from each function's symbol and per-plugin options appear
+   only when registered via `Tabnas.SetPluginOptions`.
 5. **`ALTS` condition counter map (`CN=`).** The canonical TS renders the
    normalised condition's counter map as `CN=` (from `a.c.n`). The Go
    engine has no equivalent `AltSpec` field — it folds counter conditions

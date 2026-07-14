@@ -38,15 +38,18 @@ specific input.
    j.Parse(`{ "a": 1 }`)
    ```
 
-2. Trace lines go to stdout. You get `[lex]` lines (one per token) and
-   `[rule]` lines (one per rule open/close). The Go engine exposes these
-   two streams; the finer TypeScript kinds are not available — see the
-   [documented differences](../reference.md#documented-differences-go-vs-canonical-typescript).
+2. Trace lines go to stdout (pass an `io.Writer` under `"out"` to
+   capture them). You get the same kinds as TypeScript — `step`, `stack`,
+   `rule`, `lex`, `parse`, `node` — with matching line shapes; see the
+   [trace output reference](../reference.md#trace-output) for the small
+   remaining differences (no alt index on `parse` lines, no matcher name
+   on `lex` lines).
 
 ## Notes
 
 - TypeScript trace output goes to the parser's configured console; to
-  capture it, override that console. Go trace output goes to stdout.
+  capture it, override that console. Go trace output goes to stdout by
+  default, or to the `io.Writer` passed as `opts["out"]`.
 - If you see no output, confirm tracing is enabled (and, in TypeScript,
   that at least one kind is on — see
   [Choose which events to trace](select-trace-kinds.md)).
