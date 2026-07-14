@@ -1,6 +1,6 @@
 {
   "name": "@tabnas/debug",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "main": "dist/debug.js",
   "type": "commonjs",
   "types": "dist/debug.d.ts",
@@ -15,7 +15,8 @@
   "author": "Richard Rodger (http://richardrodger.com)",
   "repository": {
     "type": "git",
-    "url": "git://github.com/rjrodger/tabnas-debug.git"
+    "url": "git://github.com/tabnas/debug.git",
+    "directory": "ts"
   },
   "scripts": {
     "test": "node --enable-source-maps --test test/**/*.test.js",
