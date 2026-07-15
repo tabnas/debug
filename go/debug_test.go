@@ -477,3 +477,128 @@ func section(out, start, end string) string {
 	}
 	return out[si:ei]
 }
+
+// buildAbnfOptGrammar reproduces, by hand, the rule structure the abnf
+// forward-compiler emits for `add = NR [ PL add ]` / `PL = "+"`: the
+// optional `[ … ]` and its group / chain-step are separate synthetic
+// productions (`_gen…_opt…`, `_gen…_group`, `…$step1`). The debug ABNF
+// emitter must fold these back into `NR [ PL add ]` rather than print the
+// `_gen…` rules. (debug does not depend on @tabnas/abnf, so the shape is
+// reconstructed here — mirrors the sibling-path round-trip test in
+// ../ts/test/abnf.test.js.)
+func buildAbnfOptGrammar(t *testing.T) *tabnas.Tabnas {
+	t.Helper()
+	plus := "+"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#T": &plus}},
+		Rule:  &tabnas.RuleOptions{Start: "add"},
+	})
+	nr := j.Token("#NR")
+	tt := j.Token("#T")
+
+	j.Rule("add", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{nr}}, P: "_gen2_opt__gen1_group"})
+		rs.AddClose(&tabnas.AltSpec{}) // epsilon
+	})
+	j.Rule("PL", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{tt}}})
+	})
+	j.Rule("_gen1_group", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{P: "PL"})
+		rs.AddClose(&tabnas.AltSpec{R: "_gen1_group$step1"})
+	})
+	j.Rule("_gen1_group$step1", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{P: "add"})
+		rs.AddClose(&tabnas.AltSpec{}) // epsilon
+	})
+	j.Rule("_gen2_opt__gen1_group", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{tt}}, P: "_gen1_group", B: 1})
+		rs.AddOpen(&tabnas.AltSpec{}) // epsilon alt (makes the group optional)
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+	return j
+}
+
+// TestAbnfFoldsSyntheticOptional is the positive round-trip case: the abnf
+// compiler's synthetic `_gen…` helpers fold back into `[ … ]`, so a grammar
+// authored as `add = NR [ PL add ]` re-emits as that same ABNF — no `_gen`
+// productions leak into the output. Parity with the TS emitAbnf() folding.
+func TestAbnfFoldsSyntheticOptional(t *testing.T) {
+	j := buildAbnfOptGrammar(t)
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+
+	want := "add = NR [ PL add ]\n" +
+		"PL = T\n" +
+		"\n" +
+		"NR = <number>\n" +
+		"T  = \"+\""
+	if out != want {
+		t.Errorf("Abnf folding mismatch\n--- got ---\n%s\n--- want ---\n%s", out, want)
+	}
+	if strings.Contains(out, "_gen") {
+		t.Errorf("Abnf leaked a synthetic _gen production:\n%s", out)
+	}
+}
+
+// buildAbnfStarGrammar reproduces the shape the abnf compiler emits for a
+// repetition (`rep = *PL`): a `_gen…_star_…` production with an empty
+// (zero-or-more) open alternative. Unlike `[ … ]`, repetition uses a
+// probe-optimised subgraph that does NOT reconstruct as `*(…)` reliably, so
+// the emitter must KEEP it as a production rather than fold it.
+func buildAbnfStarGrammar(t *testing.T) *tabnas.Tabnas {
+	t.Helper()
+	plus := "+"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#T": &plus}},
+		Rule:  &tabnas.RuleOptions{Start: "rep"},
+	})
+	tt := j.Token("#T")
+
+	j.Rule("rep", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{P: "_gen1_star_T"})
+		rs.AddClose(&tabnas.AltSpec{}) // epsilon
+	})
+	j.Rule("_gen1_star_T", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{tt}}})
+		rs.AddOpen(&tabnas.AltSpec{}) // empty alt -> zero-or-more
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+	return j
+}
+
+// TestAbnfKeepsRepetitionProduction is the negative case: a `_gen…_star_…`
+// synthetic is NOT folded. It stays a bareword reference in its parent and
+// is emitted as its own production, whose empty open alternative is
+// preserved as a trailing `/` (the zero-or-more marker). Parity with the TS
+// isFoldable() exclusion of `_star`/`_plus`/`$alt`.
+func TestAbnfKeepsRepetitionProduction(t *testing.T) {
+	j := buildAbnfStarGrammar(t)
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+
+	want := "rep = _gen1_star_T\n" +
+		"_gen1_star_T = T /\n" +
+		"\n" +
+		"T = \"+\""
+	if out != want {
+		t.Errorf("Abnf repetition mismatch\n--- got ---\n%s\n--- want ---\n%s", out, want)
+	}
+	// The star rule must survive as a production (not inlined away).
+	if !strings.Contains(out, "_gen1_star_T = T /") {
+		t.Errorf("repetition production was not kept:\n%s", out)
+	}
+}

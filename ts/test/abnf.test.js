@@ -143,6 +143,38 @@ describe('abnf', () => {
     )
   })
 
+  // Explicit structural checks on the emitted ABNF (the round-trip tests
+  // above verify recognition equivalence; these pin the exact folded shape,
+  // matching the Go TestAbnfFoldsSyntheticOptional / TestAbnfKeepsRepetition
+  // tests). emit() compiles A0 via abnf and returns what debug re-emits.
+  const emit = (abnf0) => {
+    const tn = new Tabnas()
+    tn.use(Debug, { print: false, trace: false })
+    tn.grammar(abnfConvert(abnf0))
+    return tn.debug.abnf()
+  }
+
+  it('folds a synthetic optional back to [ … ] (no _gen leaks)', () => {
+    const out = emit('add = NR [ PL add ]\nPL = "+"')
+    assert.ok(
+      out.split('\n').includes('add = NR [ PL add ]'),
+      'optional folded to `NR [ PL add ]`:\n' + out,
+    )
+    assert.ok(!/_gen/.test(out), 'no synthetic _gen production leaked:\n' + out)
+  })
+
+  it('keeps repetition as a production (does not fold *)', () => {
+    const out = emit('rep = *PL\nPL = "+"')
+    assert.ok(
+      /^_gen\d+_star_PL = /m.test(out),
+      'star kept as its own production:\n' + out,
+    )
+    assert.ok(
+      / \/$/m.test(out),
+      'zero-or-more empty alternative preserved as a trailing `/`:\n' + out,
+    )
+  })
+
   it('describe() includes an ABNF section', () => {
     const tn = new Tabnas()
     tn.use(Debug, { print: false, trace: false })

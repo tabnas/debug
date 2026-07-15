@@ -657,6 +657,16 @@ func jsonStr(v any) string {
 	return string(b)
 }
 
+// Synthetic-rule name patterns for emitAbnf's folding (mirrors the TS
+// isSynthetic()/isFoldable()): genPrefix marks abnf forward-compiler
+// helpers (`_gen<n>_…`); keepSynthetic marks the ones NOT folded back —
+// repetition (`_star`/`_plus`) and its `$alt…` helpers, whose
+// probe-optimised subgraph does not reconstruct reliably.
+var (
+	genPrefix     = regexp.MustCompile(`^_gen\d`)
+	keepSynthetic = regexp.MustCompile(`_star|_plus|\$alt`)
+)
+
 // emitAbnf renders an ABNF representation of the instance's *live*
 // grammar, mirroring the canonical TypeScript emitAbnf() in
 // ../ts/src/debug.ts. It reads ONLY the running engine (config + rule
@@ -719,32 +729,6 @@ func emitAbnf(j *tabnas.Tabnas) string {
 		fixedSrc[tin] = src
 	}
 
-	// Order productions: real start first, then every other non-wrapper
-	// rule in stable (sorted) order, de-duplicated. The TS form uses the
-	// engine's insertion order; the Go RSM is a map, so a sorted order is
-	// used for determinism (the shared add grammar emits identically
-	// because its rule names already sort as start-first by construction).
-	ruleNames := make([]string, 0, len(rsm))
-	for rn := range rsm {
-		if rn != synthWrapper {
-			ruleNames = append(ruleNames, rn)
-		}
-	}
-	sort.Strings(ruleNames)
-
-	ordered := make([]string, 0, len(ruleNames))
-	seen := make(map[string]bool)
-	if startRule != "" && rsm[startRule] != nil {
-		ordered = append(ordered, startRule)
-		seen[startRule] = true
-	}
-	for _, rn := range ruleNames {
-		if !seen[rn] {
-			ordered = append(ordered, rn)
-			seen[rn] = true
-		}
-	}
-
 	// Every token renders as its bare name in rule bodies; `used` collects
 	// each token's definition for the legend printed after the
 	// productions. usedOrder preserves first-seen order so the legend is
@@ -758,59 +742,221 @@ func emitAbnf(j *tabnas.Tabnas) string {
 		}
 	}
 
+	// A rule the abnf forward-compiler synthesised for a `[...]` / `*(...)` /
+	// `1*(...)` / group / chain-step: named `_gen<n>_…` or carrying a `$`.
+	// Instead of emitting these as their own productions we fold each back
+	// into the ABNF construct it encodes, so `tn.abnf(G)` then `Abnf()`
+	// reproduces `G` rather than the expanded internal form. Mirrors the TS
+	// isSynthetic()/isFoldable(); only the clean `[…]`/group/step helpers
+	// fold — repetition (`_star`/`_plus`, `$alt…`) stays a production.
+	isSynthetic := func(name string) bool {
+		return name != synthWrapper && (genPrefix.MatchString(name) || strings.Contains(name, "$"))
+	}
+	isFoldable := func(name string) bool {
+		return isSynthetic(name) && !keepSynthetic.MatchString(name)
+	}
+
+	hasContent := func(alt *tabnas.AltSpec) bool {
+		return alt != nil && (len(alt.S) > 0 || alt.P != "" || alt.R != "")
+	}
+	contentOpens := func(rs *tabnas.RuleSpec) []*tabnas.AltSpec {
+		var out []*tabnas.AltSpec
+		if rs == nil {
+			return out
+		}
+		for _, alt := range rs.OpenAlts() {
+			if hasContent(alt) {
+				out = append(out, alt)
+			}
+		}
+		return out
+	}
+
+	// Mutually recursive: seqOfAlt -> inlineRef -> ruleSeq/emitBody ->
+	// seqOfAlt. Declared first so each can call the others.
+	var seqOfAlt func(alt *tabnas.AltSpec, seen map[string]bool) string
+	var closeCont func(rs *tabnas.RuleSpec, seen map[string]bool) string
+	var ruleSeq func(rs *tabnas.RuleSpec, seen map[string]bool) string
+	var emitBody func(rs *tabnas.RuleSpec, seen map[string]bool) string
+	var inlineRef func(name string, seen map[string]bool) string
+
+	// Render one alt as an ABNF element sequence: its .S token positions then
+	// its .P/.R target (a synthetic target is inlined). A B+push/replace alt
+	// peeks its .S tokens (the pushed rule consumes them) — skip them.
+	seqOfAlt = func(alt *tabnas.AltSpec, seen map[string]bool) string {
+		if alt == nil {
+			return ""
+		}
+		var els []string
+		peekOnly := alt.B != 0 && (alt.P != "" || alt.R != "")
+		if !peekOnly {
+			for _, pos := range alt.S {
+				// A position is a set of acceptable tins: one renders bare,
+				// several render as `( a / b )`. Drop the end token.
+				inner := make([]string, 0, len(pos))
+				for _, tin := range pos {
+					if tin == endTin {
+						continue
+					}
+					inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed))
+				}
+				switch len(inner) {
+				case 0:
+				case 1:
+					els = append(els, inner[0])
+				default:
+					els = append(els, "( "+strings.Join(inner, " / ")+" )")
+				}
+			}
+		}
+		target := alt.P
+		if target == "" {
+			target = alt.R
+		}
+		if target != "" {
+			els = append(els, inlineRef(target, seen))
+		}
+		return strings.Join(els, " ")
+	}
+
+	// The close-alt continuation of a rule: its trailing element sequence,
+	// wrapped in `[ … ]` when an epsilon (empty) close alt makes it optional.
+	closeCont = func(rs *tabnas.RuleSpec, seen map[string]bool) string {
+		if rs == nil {
+			return ""
+		}
+		closes := rs.CloseAlts()
+		hasEpsilon := false
+		for _, alt := range closes {
+			if alt == nil || isEndAlt(alt, endTin) {
+				continue
+			}
+			if !hasContent(alt) {
+				hasEpsilon = true
+				break
+			}
+		}
+		for _, alt := range closes {
+			if alt == nil || isEndAlt(alt, endTin) || !hasContent(alt) {
+				continue
+			}
+			cont := seqOfAlt(alt, seen)
+			if cont == "" {
+				continue
+			}
+			if hasEpsilon {
+				return "[ " + cont + " ]"
+			}
+			return cont
+		}
+		return ""
+	}
+
+	// dedupeJoin joins the non-empty, de-duplicated element sequences with
+	// " / " and appends the close continuation.
+	dedupeJoin := func(raw []string, rs *tabnas.RuleSpec, seen map[string]bool, keepEmpty bool) string {
+		var parts []string
+		seenPart := map[string]bool{}
+		hasEmpty := false
+		for _, s := range raw {
+			if s == "" {
+				hasEmpty = true
+				continue
+			}
+			if seenPart[s] {
+				continue
+			}
+			seenPart[s] = true
+			parts = append(parts, s)
+		}
+		if keepEmpty && hasEmpty {
+			parts = append(parts, "")
+		}
+		return strings.TrimSpace(strings.Join(parts, " / ") + " " + closeCont(rs, seen))
+	}
+
+	// Full ABNF for a rule body: content open alternatives joined by `/`,
+	// then any close continuation.
+	ruleSeq = func(rs *tabnas.RuleSpec, seen map[string]bool) string {
+		var raw []string
+		for _, alt := range contentOpens(rs) {
+			raw = append(raw, seqOfAlt(alt, seen))
+		}
+		return dedupeJoin(raw, rs, seen, false)
+	}
+
+	// Full production body: like ruleSeq, but PRESERVES an empty open
+	// alternative (rendered as a trailing `/`) — essential for kept `*(…)`
+	// repetition rules, whose empty alt is what makes them zero-or-more.
+	emitBody = func(rs *tabnas.RuleSpec, seen map[string]bool) string {
+		if rs == nil {
+			return ""
+		}
+		var raw []string
+		for _, alt := range rs.OpenAlts() {
+			raw = append(raw, seqOfAlt(alt, seen))
+		}
+		return dedupeJoin(raw, rs, seen, true)
+	}
+
+	// Inline a reference: a user rule (or a kept, non-foldable synthetic such
+	// as repetition) stays a bareword; a foldable synthetic folds back into
+	// the ABNF construct it encodes.
+	inlineRef = func(name string, seen map[string]bool) string {
+		if !isFoldable(name) {
+			return name
+		}
+		if seen[name] {
+			return "" // foldable loop-back — terminates the loop
+		}
+		s2 := make(map[string]bool, len(seen)+1)
+		for k := range seen {
+			s2[k] = true
+		}
+		s2[name] = true
+		rs := rsm[name]
+		if rs == nil {
+			return name
+		}
+		if strings.Contains(name, "_opt") {
+			return "[ " + ruleSeq(rs, s2) + " ]"
+		}
+		// group / chain-step: inline the body, parenthesising a bare
+		// multi-way alternation that will sit inside a larger sequence.
+		body := ruleSeq(rs, s2)
+		if len(contentOpens(rs)) > 1 && closeCont(rs, s2) == "" {
+			return "( " + body + " )"
+		}
+		return body
+	}
+
+	// Order: real start first, then remaining user (non-foldable) rules in
+	// stable (sorted) order, de-duplicated. Foldable synthetics are omitted
+	// as productions — they are inlined at their reference sites instead.
+	ruleNames := make([]string, 0, len(rsm))
+	for rn := range rsm {
+		if rn != synthWrapper && !isFoldable(rn) {
+			ruleNames = append(ruleNames, rn)
+		}
+	}
+	sort.Strings(ruleNames)
+
+	ordered := make([]string, 0, len(ruleNames))
+	seenR := make(map[string]bool)
+	if startRule != "" && rsm[startRule] != nil && !isFoldable(startRule) {
+		ordered = append(ordered, startRule)
+		seenR[startRule] = true
+	}
+	for _, rn := range ruleNames {
+		if !seenR[rn] {
+			ordered = append(ordered, rn)
+			seenR[rn] = true
+		}
+	}
+
 	var lines []string
 	for _, rn := range ordered {
-		rs := rsm[rn]
-		var alts []string
-
-		if rs != nil {
-			for _, alt := range rs.OpenAlts() {
-				alts = append(alts, emitAbnfAlt(j, cfg, fixedSrc, rsm, alt, endTin, recordUsed))
-			}
-
-			closeAlts := rs.CloseAlts()
-
-			// An epsilon close alt (no .S/.P/.R, and not the #ZZ end) means
-			// the close continuation is OPTIONAL — render it as `[ cont ]`.
-			hasEpsilonClose := false
-			for _, alt := range closeAlts {
-				if alt == nil {
-					continue
-				}
-				if isEndAlt(alt, endTin) {
-					continue
-				}
-				if len(alt.S) == 0 && alt.P == "" && alt.R == "" {
-					hasEpsilonClose = true
-					break
-				}
-			}
-
-			for _, alt := range closeAlts {
-				if alt == nil || isEndAlt(alt, endTin) {
-					continue
-				}
-				// Only fold in close continuations that actually reference a
-				// rule; pure capture-actions (no .S/.P/.R) are noise.
-				if alt.P != "" || alt.R != "" {
-					cont := emitAbnfAlt(j, cfg, fixedSrc, rsm, alt, endTin, recordUsed)
-					piece := cont
-					if hasEpsilonClose {
-						piece = "[ " + cont + " ]"
-					}
-					if len(alts) > 0 {
-						alts[len(alts)-1] = strings.TrimSpace(alts[len(alts)-1] + " " + piece)
-					} else {
-						alts = append(alts, piece)
-					}
-				}
-			}
-		}
-
-		body := ""
-		if len(alts) > 0 {
-			body = strings.Join(alts, " / ")
-		}
+		body := emitBody(rsm[rn], map[string]bool{rn: true})
 		lines = append(lines, rn+" = "+body)
 	}
 
@@ -844,64 +990,6 @@ func isEndAlt(alt *tabnas.AltSpec, endTin tabnas.Tin) bool {
 		return false
 	}
 	return pos[0] == endTin
-}
-
-// emitAbnfAlt renders a single alt as an ABNF element sequence: each token
-// in .S, then any .P/.R rule reference, space-separated. An alt with no
-// elements renders as the empty string (an empty alternative). Mirrors the
-// TS emitAbnfAlt().
-func emitAbnfAlt(
-	j *tabnas.Tabnas,
-	cfg *tabnas.LexConfig,
-	fixedSrc map[tabnas.Tin]string,
-	rsm map[string]*tabnas.RuleSpec,
-	alt *tabnas.AltSpec,
-	endTin tabnas.Tin,
-	recordUsed func(name, form string),
-) string {
-	if alt == nil {
-		return ""
-	}
-	var els []string
-
-	// When `B` (backup/lookahead) is set together with a push/replace, the
-	// .S tokens are a *predictive peek* — matched to choose this alt but
-	// not consumed here; the pushed rule consumes them. Emitting them as
-	// terminals would double-count the input, so skip them and let the
-	// rule reference stand alone (FIRST-set guard / optional dispatch).
-	peekOnly := alt.B != 0 && (alt.P != "" || alt.R != "")
-
-	if !peekOnly {
-		for _, pos := range alt.S {
-			// A position is a set of acceptable tins. A single tin renders
-			// bare; a multi-tin set renders as `( a / b )`. Drop the end
-			// token from any position.
-			inner := make([]string, 0, len(pos))
-			for _, tin := range pos {
-				if tin == endTin {
-					continue
-				}
-				inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed))
-			}
-			switch len(inner) {
-			case 0:
-				// Wildcard / end-only position: contributes nothing.
-			case 1:
-				els = append(els, inner[0])
-			default:
-				els = append(els, "( "+strings.Join(inner, " / ")+" )")
-			}
-		}
-	}
-
-	// A push/replace target is a forward reference to another production.
-	if alt.P != "" {
-		els = append(els, alt.P)
-	} else if alt.R != "" {
-		els = append(els, alt.R)
-	}
-
-	return strings.Join(els, " ")
 }
 
 // emitAbnfTerminal renders a token reference: every token appears by its
