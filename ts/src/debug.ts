@@ -374,8 +374,6 @@ function emitAbnf(tabnas: Tabnas): string {
 
   // bnf wraps grammars in a synthetic '__start__' rule (open .p -> the
   // real start, close matches #ZZ); skip it and lead with the real start.
-  // A hand-written grammar's cfg.rule.start is itself a real rule, so keep
-  // it and emit it first like any other production.
   const synthWrapper: string | null =
     '__start__' === cfg.rule.start ? cfg.rule.start : null
   let startRule: string | null = synthWrapper ? null : cfg.rule.start
@@ -383,100 +381,168 @@ function emitAbnf(tabnas: Tabnas): string {
     const wrapper: any = rules[synthWrapper]
     if (wrapper) {
       for (const alt of wrapper.def.open) {
-        if ('string' === typeof alt.p) {
-          startRule = alt.p
-          break
-        }
-        if ('string' === typeof alt.r) {
-          startRule = alt.r
-          break
-        }
+        if ('string' === typeof alt.p) { startRule = alt.p; break }
+        if ('string' === typeof alt.r) { startRule = alt.r; break }
       }
     }
   }
 
-  // tin (number) -> token name (e.g. 18 -> '#RX_..'); use tabnas.token.
-  // name -> tin via cfg.t (which also carries the reverse mapping).
   const nameToTin = (name: string): number | undefined => {
     const tin = (cfg.t as any)[name]
     return 'number' === typeof tin ? tin : undefined
   }
-
-  // The engine's reserved end-of-source token; never an ABNF element.
   const endTin = nameToTin('#ZZ')
+  const toTin = (t: any): number | undefined =>
+    'number' === typeof t ? t : (cfg.t as any)[t]
 
-  // Order productions: real start first, then every other non-wrapper
-  // rule in insertion order, de-duplicated.
-  const ruleNames = Object.keys(rules).filter((rn) => rn !== synthWrapper)
-  const ordered: string[] = []
-  const seen = new Set<string>()
-  if (startRule && rules[startRule]) {
-    ordered.push(startRule)
-    seen.add(startRule)
+  // A rule the abnf forward-compiler synthesised for a `[...]` / `*(...)` /
+  // `1*(...)` / group / chain-step: named `_gen<n>_…` or carrying a `$`.
+  // These are never user-authored, so instead of emitting them as their own
+  // productions we fold each back into the ABNF construct it encodes — a
+  // reasonable round-trip (`tn.abnf(G)` then `debug.abnf()` reproduces `G`,
+  // not the expanded internal form).
+  const isSynthetic = (name: string): boolean =>
+    name !== synthWrapper && (/^_gen\d/.test(name) || name.includes('$'))
+
+  // We only fold the clean cases — `[…]` optionals plus the group / chain
+  // helpers they inline through. Repetition (`_star` / `_plus`) uses a
+  // probe-optimised subgraph that does not reconstruct reliably, so those
+  // rules (and their `$alt…` helpers) are emitted as productions unchanged
+  // (still a valid, recognition-equivalent grammar).
+  const isFoldable = (name: string): boolean =>
+    isSynthetic(name) && !/_star|_plus|\$alt/.test(name)
+
+  const used = new Map<string, string>()
+
+  const hasContent = (alt: any): boolean =>
+    (Array.isArray(alt.s) ? 0 < alt.s.length : null != alt.s) ||
+    'string' === typeof alt.p ||
+    'string' === typeof alt.r
+  const contentOpens = (rs: any): any[] => (rs.def.open || []).filter(hasContent)
+
+  // Render one alt as an ABNF element sequence: its `.s` tokens then its
+  // `.p`/`.r` target (synthetic targets are inlined). A `b`+push alt peeks
+  // its `.s` tokens (the pushed rule consumes them) — skip them.
+  const seqOfAlt = (alt: any, seen: Set<string>): string => {
+    const els: string[] = []
+    const peekOnly =
+      alt.b && ('string' === typeof alt.p || 'string' === typeof alt.r)
+    const seq: any[] = peekOnly
+      ? []
+      : Array.isArray(alt.s)
+        ? alt.s
+        : null == alt.s
+          ? []
+          : [alt.s]
+    for (const item of seq) {
+      if (null == item) continue
+      if (Array.isArray(item)) {
+        const inner = item
+          .map(toTin)
+          .filter((t: any): t is number => null != t && t !== endTin)
+          .map((t: number) => emitAbnfTerminal(tabnas, cfg, t, used))
+        if (0 < inner.length) els.push('( ' + inner.join(' / ') + ' )')
+        continue
+      }
+      const tin = toTin(item)
+      if (null == tin || tin === endTin) continue
+      els.push(emitAbnfTerminal(tabnas, cfg, tin, used))
+    }
+    const target =
+      'string' === typeof alt.p ? alt.p : 'string' === typeof alt.r ? alt.r : null
+    if (target) els.push(inlineRef(target, seen))
+    return els.join(' ')
   }
-  for (const rn of ruleNames) {
-    if (!seen.has(rn)) {
+
+  // The close-alt continuation of a rule: its trailing element sequence,
+  // wrapped in `[ … ]` when an epsilon (empty) close alt makes it optional.
+  const closeCont = (rs: any, seen: Set<string>): string => {
+    const closes: any[] = rs.def.close || []
+    const isEnd = (alt: any) => {
+      const first =
+        Array.isArray(alt.s) && 1 === alt.s.length ? toTin(alt.s[0]) : undefined
+      return null != endTin && first === endTin
+    }
+    const hasEpsilon = closes.some(
+      (a) => !isEnd(a) && !hasContent(a),
+    )
+    for (const alt of closes) {
+      if (isEnd(alt) || !hasContent(alt)) continue
+      const cont = seqOfAlt(alt, seen)
+      if (!cont) continue
+      return hasEpsilon ? '[ ' + cont + ' ]' : cont
+    }
+    return ''
+  }
+
+  // Full ABNF for a rule body: open alternatives joined by `/`, then any
+  // close continuation.
+  const ruleSeq = (rs: any, seen: Set<string>): string => {
+    const alts = [
+      ...new Set(contentOpens(rs).map((a: any) => seqOfAlt(a, seen)).filter(Boolean)),
+    ]
+    return (alts.join(' / ') + ' ' + closeCont(rs, seen)).trim()
+  }
+
+  // Full production body: like ruleSeq, but PRESERVES an empty open
+  // alternative (rendered as a trailing `/`) — essential for kept `*(…)`
+  // repetition rules, whose empty alt is what makes them zero-or-more.
+  const emitBody = (rs: any, seen: Set<string>): string => {
+    const raw = (rs.def.open || []).map((a: any) => seqOfAlt(a, seen))
+    const nonEmpty = [...new Set(raw.filter(Boolean))]
+    const parts = raw.some((x: string) => '' === x)
+      ? [...nonEmpty, '']
+      : nonEmpty
+    return (parts.join(' / ') + ' ' + closeCont(rs, seen)).trim()
+  }
+
+  // Inline a reference: a user rule stays a bareword; a synthetic rule folds
+  // back into the ABNF construct it encodes.
+  const inlineRef = (name: string, seen: Set<string>): string => {
+    // A user rule or a kept (non-foldable, e.g. repetition) synthetic rule
+    // stays a bareword reference; only foldable synthetics are inlined.
+    if (!isFoldable(name)) return name
+    if (seen.has(name)) return '' // foldable loop-back — terminates the loop
+    const s2 = new Set(seen)
+    s2.add(name)
+    const rs: any = rules[name]
+    if (!rs) return name
+    if (name.includes('_opt')) {
+      return '[ ' + ruleSeq(rs, s2) + ' ]'
+    }
+    // group / chain-step: inline the body, parenthesising a bare
+    // multi-way alternation that will sit inside a larger sequence.
+    const body = ruleSeq(rs, s2)
+    return 1 < contentOpens(rs).length && !closeCont(rs, s2)
+      ? '( ' + body + ' )'
+      : body
+  }
+
+  // Order: real start first, then the remaining USER (non-synthetic) rules.
+  const userRules = Object.keys(rules).filter(
+    (rn) => rn !== synthWrapper && !isFoldable(rn),
+  )
+  const ordered: string[] = []
+  const seenR = new Set<string>()
+  if (startRule && rules[startRule] && !isFoldable(startRule)) {
+    ordered.push(startRule)
+    seenR.add(startRule)
+  }
+  for (const rn of userRules) {
+    if (!seenR.has(rn)) {
       ordered.push(rn)
-      seen.add(rn)
+      seenR.add(rn)
     }
   }
 
-  // Every token renders as its bare name in rule bodies; `used` collects
-  // each token's definition for the comment legend printed at the top.
-  const used = new Map<string, string>()
   const lines: string[] = []
   for (const rn of ordered) {
-    const rs: any = rules[rn]
-    const alts: string[] = []
-
-    for (const alt of rs.def.open) {
-      alts.push(emitAbnfAlt(tabnas, cfg, alt, endTin, used))
-    }
-
-    // Best-effort: a close-alt that continues into another rule
-    // (.p/.r, ignoring the end-token close) contributes a trailing
-    // reference. Epsilon close alts (no .s/.p/.r) add an empty
-    // alternative so optional/repetition shapes round-trip.
-    // An epsilon close alt (no .s/.p/.r, and not the #ZZ end) means the
-    // close continuation is OPTIONAL — render it as `[ cont ]`.
-    const closeFirstTin = (alt: any) =>
-      Array.isArray(alt.s) && 1 === alt.s.length
-        ? ('number' === typeof alt.s[0] ? alt.s[0] : (cfg.t as any)[alt.s[0]])
-        : undefined
-    const hasEpsilonClose = rs.def.close.some(
-      (alt: any) =>
-        !(null != endTin && closeFirstTin(alt) === endTin) &&
-        (!Array.isArray(alt.s) || 0 === alt.s.length) &&
-        'string' !== typeof alt.p &&
-        'string' !== typeof alt.r,
-    )
-    for (const alt of rs.def.close) {
-      const isEndAlt = null != endTin && closeFirstTin(alt) === endTin
-      if (isEndAlt) continue
-      // Only fold in close continuations that actually reference a rule;
-      // pure capture-actions (no .s/.p/.r) on a head rule are noise.
-      if ('string' === typeof alt.p || 'string' === typeof alt.r) {
-        const cont = emitAbnfAlt(tabnas, cfg, alt, endTin, used)
-        const piece = hasEpsilonClose ? '[ ' + cont + ' ]' : cont
-        if (0 < alts.length) {
-          alts[alts.length - 1] =
-            (alts[alts.length - 1] + ' ' + piece).trim()
-        } else {
-          alts.push(piece)
-        }
-      }
-    }
-
-    // A rule with no usable open alts but an epsilon possibility still
-    // needs to print something; default to an empty alternative.
-    const body = 0 === alts.length ? '' : alts.join(' / ')
+    const body = emitBody(rules[rn], new Set([rn]))
     lines.push(rn + ' = ' + body)
   }
 
-  // Define each token as its own ABNF rule (named terminals, like the
-  // ABNF core rules e.g. `DIGIT = %x30-39`): a quoted literal, a
-  // char-range, or a prose-val `<...>` for built-in lexer tokens. Emitted
-  // after the grammar productions, with `=` aligned for readability.
+  // Define each token as its own ABNF rule (named terminals), after the
+  // productions, with `=` aligned for readability.
   if (0 < used.size) {
     const pad = Math.max(...[...used.keys()].map((n) => n.length))
     lines.push('')
@@ -485,56 +551,6 @@ function emitAbnf(tabnas: Tabnas): string {
     }
   }
   return lines.join('\n')
-}
-
-// Render a single normalised alt as an ABNF element sequence: each
-// token in .s, then any .p/.r rule reference, space-separated. An alt
-// with no elements renders as the empty string (an empty alternative).
-function emitAbnfAlt(
-  tabnas: Tabnas,
-  cfg: Config,
-  alt: any,
-  endTin: number | undefined,
-  used: Map<string, string>,
-): string {
-  const els: string[] = []
-
-  // .s entries are token *names* (e.g. '#HI'), token *tins* (numbers),
-  // or — in subset form — an array of either. Resolve each to a tin via
-  // the engine's bidirectional token table (cfg.t) before rendering.
-  const toTin = (t: any): number | undefined =>
-    'number' === typeof t ? t : (cfg.t as any)[t]
-
-  // When `b` (backup/lookahead) is set together with a push/replace, the
-  // `.s` tokens are a *predictive peek* — they are matched to choose this
-  // alt but NOT consumed here; the pushed rule consumes them. Emitting
-  // them as terminals would double-count the input, so skip them and let
-  // the rule reference stand alone (this is how bnf encodes FIRST-set
-  // guards and the `[X]` optional-group dispatch).
-  const peekOnly =
-    alt.b && ('string' === typeof alt.p || 'string' === typeof alt.r)
-
-  const seq: any[] = peekOnly || !Array.isArray(alt.s) ? [] : alt.s
-  for (const item of seq) {
-    if (null == item) continue
-    if (Array.isArray(item)) {
-      const inner = item
-        .map(toTin)
-        .filter((t: any): t is number => null != t && t !== endTin)
-        .map((t: number) => emitAbnfTerminal(tabnas, cfg, t, used))
-      if (0 < inner.length) els.push('( ' + inner.join(' / ') + ' )')
-      continue
-    }
-    const tin = toTin(item)
-    if (null == tin || tin === endTin) continue
-    els.push(emitAbnfTerminal(tabnas, cfg, tin, used))
-  }
-
-  // A push/replace target is a forward reference to another production.
-  if ('string' === typeof alt.p) els.push(alt.p)
-  else if ('string' === typeof alt.r) els.push(alt.r)
-
-  return els.join(' ')
 }
 
 // Render a token reference: every token appears by its bare NAME (e.g.
