@@ -1,5 +1,12 @@
 # @tabnas/debug
 
+<!-- tabnas-badges -->
+[![npm](https://tabnas.github.io/status/badges/debug-npm.svg)](https://www.npmjs.com/package/@tabnas/debug)
+[![CI](https://github.com/tabnas/debug/actions/workflows/ci.yml/badge.svg)](https://github.com/tabnas/debug/actions/workflows/ci.yml)
+[![go](https://tabnas.github.io/status/badges/debug-go.svg)](https://pkg.go.dev/github.com/tabnas/debug/go)
+[![tabnas standard](https://tabnas.github.io/status/badges/debug-standard.svg)](https://tabnas.github.io/status/)
+<!-- /tabnas-badges -->
+
 Debug / introspection plugin for the
 [tabnas](https://github.com/tabnas/parser) parser. It makes a grammar
 *visible*: `model()` returns a structured description of an engine's
