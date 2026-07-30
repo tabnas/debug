@@ -4,8 +4,6 @@ package tabnasdebug_test
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,10 +12,9 @@ import (
 	tabnasdebug "github.com/tabnas/debug/go"
 )
 
-// headersGolden is the shared cross-runtime fixture of the eight canonical
-// section headers; the TypeScript suite reads the same file. Keeping both
-// suites pinned to it enforces the diffability claim.
-const headersGolden = "../test/headers.golden"
+// The canonical section headers, and their order, are pinned for every
+// grammar fixture in test/spec/sections.tsv and run by both runtimes — see
+// parity_test.go and ../test/AGENTS.md.
 
 // buildTreeGrammar installs a small non-trivial grammar on a fresh
 // instance: a `top` rule that open-pushes to a single-character rule name
@@ -338,45 +335,6 @@ func TestDescribeBodies(t *testing.T) {
 		if !strings.Contains(alts, want) {
 			t.Errorf("ALTS missing %q:\n%s", want, alts)
 		}
-	}
-}
-
-// TestHeadersMatchGolden checks that Describe emits, in order, exactly the
-// eight canonical section headers held in the shared golden fixture. The
-// TypeScript suite asserts the same fixture, so this pins both runtimes to
-// one diffable layout.
-func TestHeadersMatchGolden(t *testing.T) {
-	data, err := os.ReadFile(filepath.Clean(headersGolden))
-	if err != nil {
-		t.Fatalf("reading golden headers fixture: %v", err)
-	}
-	golden := make([]string, 0, 8)
-	for _, line := range strings.Split(string(data), "\n") {
-		if line != "" {
-			golden = append(golden, line)
-		}
-	}
-	if len(golden) != 8 {
-		t.Fatalf("golden fixture should hold 8 headers, got %d", len(golden))
-	}
-
-	j := tabnas.Make()
-	out, err := tabnasdebug.Describe(j)
-	if err != nil {
-		t.Fatalf("Describe returned error: %v", err)
-	}
-
-	cursor := -1
-	for _, header := range golden {
-		at := strings.Index(out[cursor+1:], header)
-		if at < 0 {
-			t.Fatalf("Describe output missing header %q", header)
-		}
-		at += cursor + 1
-		if at <= cursor {
-			t.Fatalf("header out of order: %q", header)
-		}
-		cursor = at
 	}
 }
 

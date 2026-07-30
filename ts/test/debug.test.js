@@ -24,11 +24,6 @@ try {
 } catch { /* fixture unavailable; dependent tests skip */ }
 const SKIP_JSON = json ? false : 'parser dist-test fixture unavailable'
 
-// The seven canonical section headers are shared with the Go suite via a
-// single golden fixture; both suites assert their headers match it so the
-// cross-runtime diffability claim is enforced.
-const HEADERS_GOLDEN = path.resolve(__dirname, '..', '..', 'test', 'headers.golden')
-
 // A console stand-in that records each log() line (its arguments joined
 // with a space, matching how console.log renders them) for assertions.
 function makeFakeConsole() {
@@ -91,28 +86,9 @@ describe('debug', () => {
     assert.ok(out.includes('  start: '), 'describe() should report the rule start')
   })
 
-  // The eight section headers describe() emits must match, in order, the
-  // shared golden fixture the Go suite also reads. This locks the two
-  // runtimes to the same diffable layout.
-  it('emits exactly the shared golden section headers, in order', () => {
-    const golden = fs
-      .readFileSync(HEADERS_GOLDEN, 'utf8')
-      .split('\n')
-      .filter((line) => line.length > 0)
-    assert.equal(golden.length, 8, 'golden fixture should hold 8 headers')
-
-    const tn = new Tabnas()
-    tn.use(Debug, { print: false, trace: false })
-    const out = tn.debug.describe()
-
-    // Headers appear in the documented order.
-    let cursor = -1
-    for (const header of golden) {
-      const at = out.indexOf(header, cursor + 1)
-      assert.ok(at > cursor, 'header out of order or missing: ' + header)
-      cursor = at
-    }
-  })
+  // The canonical section headers, and their order, are pinned for every
+  // grammar fixture in test/spec/sections.tsv and run by both runtimes —
+  // see parity.test.js and ../../test/AGENTS.md.
 
   describe('trace', () => {
     it('emits trace lines and no spurious empty group field on parse lines', () => {

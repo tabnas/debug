@@ -1,0 +1,4 @@
+grammar	abnf
+bare	""
+add	"val = add\nadd = NR [ PL add ]\n\nNR = <number>\nPL = \"+\""
+greet	"greet = HI / HE\n\nHI = %s\"hi\"\nHE = %s\"hello\""
