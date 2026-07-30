@@ -33,11 +33,11 @@ peer for its `--debug` flag.
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/debug` package. Everything lives in `src/debug.ts` (plugin, `describe`/`model`/`abnf`, trace hooks, ABNF emitter). Depends on `@tabnas/parser` (peer + sibling `file:` devDep). |
 | [`go/`](go/) | Go port — module `github.com/tabnas/debug/go`, all in `go/debug.go`. Tracks `ts/` as far as the Go engine API allows. |
 | [`docs/`](docs/) | Cross-language docs by purpose: `tutorial.md`, `how-to/`, `reference.md`, `explanation.md` (see `docs/README.md`). |
-| [`test/headers.golden`](test/headers.golden) | The 8 `========= … ========` section headers, shared by both suites as the cross-runtime diffability contract. |
+| [`test/spec/`](test/spec/) | The shared `.tsv` conformance fixtures both suites run — emitted ABNF and the `========= … ========` section headers, per named grammar. See [`test/AGENTS.md`](test/AGENTS.md). |
 | `scripts/fetch-parser.sh` | Legacy engine-fetch helper (see note below). |
 | `vendor/tabnas-parser` | Symlink to the sibling `../parser` checkout (git-ignored). |
 
-There is no shared `.tsv` fixture set here — this is a tool, not a
+The shared `.tsv` fixture set is deliberately narrow — this is a tool, not a
 grammar; its parity contract is the section headers and the
 `describe`/`model` output shape, not input→output pairs.
 
@@ -90,12 +90,13 @@ the `go.mod` comment still describe that older path. Don't rely on
    for behaviour, option names, `DEFAULTS`, output format, and section
    ordering. Change TS first, then update Go to match as far as the Go
    engine API allows.
-2. The **8 section headers** in `test/headers.golden` are the parity
-   contract. `describe()` (TS) and `Describe(j)` (Go) must emit them
+2. The **8 section headers** pinned by `test/spec/sections.tsv` are the
+   parity contract. `describe()` (TS) and `Describe(j)` (Go) must emit them
    byte-for-byte and in order: `INSTANCE`, `TOKENS`, `RULES`, `ALTS`,
-   `LEXER`, `CONFIG`, `PLUGIN`, `ABNF`. Both suites assert against the
-   golden so the cross-runtime diffability claim holds. (Tracing adds a
-   separate `========= TRACE ==========` header.)
+   `LEXER`, `CONFIG`, `PLUGIN`, `ABNF`. Both suites run that fixture, for
+   every grammar in the shared registry, so the cross-runtime diffability
+   claim holds. (Tracing adds a separate `========= TRACE ==========`
+   header.)
 3. Keep the shared semantics — option meanings, `DEFAULTS` / `Defaults`,
    and the `describe`/`abnf` output — in lockstep across runtimes, and
    record any new divergence in `docs/reference.md`. (`model()` is

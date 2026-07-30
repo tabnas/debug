@@ -125,5 +125,5 @@ project's combined `docs/reference.md`.
    insertion order.
 
 The `Describe` section headers are identical across both runtimes — pinned
-by the shared `test/headers.golden` fixture that both test suites assert —
+by the shared `test/spec/sections.tsv` fixture that both test suites run —
 so even where the section *bodies* differ, the layout stays diffable.
