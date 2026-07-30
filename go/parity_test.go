@@ -55,7 +55,9 @@ func loadSpec(t *testing.T, path string) (string, []specRow) {
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
-		line := scanner.Text()
+		// Strip the CR of a CRLF line: the TS loader splits on /\r?\n/ and
+		// drops it, so keeping it here would feed the runtimes different bytes.
+		line := strings.TrimSuffix(scanner.Text(), "\r")
 		if lineNo == 1 {
 			cols := strings.Split(line, "\t")
 			if len(cols) < 2 {
