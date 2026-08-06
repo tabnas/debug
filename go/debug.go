@@ -665,7 +665,62 @@ func jsonStr(v any) string {
 var (
 	genPrefix     = regexp.MustCompile(`^_gen\d`)
 	keepSynthetic = regexp.MustCompile(`_star|_plus|\$alt`)
+
+	// RFC 5234: rulename = ALPHA *(ALPHA / DIGIT / "-").
+	abnfLegalName    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
+	abnfIllegalChars = regexp.MustCompile(`[^A-Za-z0-9-]`)
+	abnfLeadingAlpha = regexp.MustCompile(`^[A-Za-z]`)
 )
+
+// abnfNamer returns a memoised mapper from an engine rule/token name to a
+// legal ABNF rulename. Engine names are not constrained the way RFC 5234
+// names are — the abnf compiler synthesises `_gen1_star_term` and `…$alt0`,
+// and a regex token arrives as `RX___U0030__U0039`. Emitted verbatim those
+// are rejected by every conforming ABNF tool, so each is mapped once and the
+// same result reused for the production head and every reference to it.
+//
+// Distinct source names can sanitise to the same string (`a_b` and `a-b`
+// both give `a-b`), so collisions take a numeric suffix — without it the
+// grammar would silently merge two rules.
+//
+// Mirrors the TS abnfNamer().
+func abnfNamer(reserve []string) func(string) string {
+	cache := map[string]string{}
+	taken := map[string]bool{}
+
+	// Names that are ALREADY legal keep their spelling and claim it up
+	// front; otherwise a sanitised synthetic could take `foo-bar` first and
+	// rename the user's real `foo-bar` rule out from under them. Sorted so
+	// the reservation order does not depend on Go's map iteration.
+	sorted := append([]string(nil), reserve...)
+	sort.Strings(sorted)
+	for _, n := range sorted {
+		if abnfLegalName.MatchString(n) && !taken[n] {
+			taken[n] = true
+			cache[n] = n
+		}
+	}
+
+	return func(name string) string {
+		if hit, ok := cache[name]; ok {
+			return hit
+		}
+		out := abnfIllegalChars.ReplaceAllString(name, "-")
+		if !abnfLeadingAlpha.MatchString(out) {
+			out = "r" + out
+		}
+		if taken[out] {
+			n := 2
+			for taken[out+"-"+strconv.Itoa(n)] {
+				n++
+			}
+			out = out + "-" + strconv.Itoa(n)
+		}
+		taken[out] = true
+		cache[name] = out
+		return out
+	}
+}
 
 // emitAbnf renders an ABNF representation of the instance's *live*
 // grammar, mirroring the canonical TypeScript emitAbnf() in
@@ -690,6 +745,14 @@ func emitAbnf(j *tabnas.Tabnas) string {
 	if cfg == nil {
 		return ""
 	}
+
+	// Seeded with the rule names so user-authored ones are never displaced;
+	// token legend names are added as they are first referenced.
+	ruleNamesAll := make([]string, 0, len(rsm))
+	for rn := range rsm {
+		ruleNamesAll = append(ruleNamesAll, rn)
+	}
+	abnfName := abnfNamer(ruleNamesAll)
 
 	// bnf wraps grammars in a synthetic '__start__' rule (open .P -> the
 	// real start, close matches #ZZ); skip it and lead with the real
@@ -798,7 +861,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 					if tin == endTin {
 						continue
 					}
-					inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed))
+					inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed, abnfName))
 				}
 				switch len(inner) {
 				case 0:
@@ -854,6 +917,13 @@ func emitAbnf(j *tabnas.Tabnas) string {
 
 	// dedupeJoin joins the non-empty, de-duplicated element sequences with
 	// " / " and appends the close continuation.
+	//
+	// When keepEmpty is set and an empty alternative is present, the rest is
+	// wrapped in `[ … ]`, NOT emitted as a trailing `/`. RFC 5234 defines
+	//   alternation = concatenation *(*c-wsp "/" *c-wsp concatenation)
+	// so every `/` must be followed by a concatenation: `x = A x /` is a
+	// syntax error rejected by conforming ABNF tools. `[ A x ]` says the
+	// same thing and is valid.
 	dedupeJoin := func(raw []string, rs *tabnas.RuleSpec, seen map[string]bool, keepEmpty bool) string {
 		var parts []string
 		seenPart := map[string]bool{}
@@ -869,10 +939,23 @@ func emitAbnf(j *tabnas.Tabnas) string {
 			seenPart[s] = true
 			parts = append(parts, s)
 		}
-		if keepEmpty && hasEmpty {
-			parts = append(parts, "")
+
+		cont := closeCont(rs, seen)
+		optional := keepEmpty && hasEmpty
+
+		// Nothing but an empty alternative. `x = ` is not a production, and
+		// ABNF has no epsilon terminal — but an empty char-val is legal
+		// (char-val permits zero chars) and matches the empty string, which
+		// is exactly what this rule does.
+		if optional && len(parts) == 0 && cont == "" {
+			return `""`
 		}
-		return strings.TrimSpace(strings.Join(parts, " / ") + " " + closeCont(rs, seen))
+
+		body := strings.Join(parts, " / ")
+		if optional {
+			body = "[ " + body + " ]"
+		}
+		return strings.TrimSpace(body + " " + cont)
 	}
 
 	// Full ABNF for a rule body: content open alternatives joined by `/`,
@@ -904,7 +987,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 	// the ABNF construct it encodes.
 	inlineRef = func(name string, seen map[string]bool) string {
 		if !isFoldable(name) {
-			return name
+			return abnfName(name)
 		}
 		if seen[name] {
 			return "" // foldable loop-back — terminates the loop
@@ -916,7 +999,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 		s2[name] = true
 		rs := rsm[name]
 		if rs == nil {
-			return name
+			return abnfName(name)
 		}
 		if strings.Contains(name, "_opt") {
 			return "[ " + ruleSeq(rs, s2) + " ]"
@@ -957,7 +1040,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 	var lines []string
 	for _, rn := range ordered {
 		body := emitBody(rsm[rn], map[string]bool{rn: true})
-		lines = append(lines, rn+" = "+body)
+		lines = append(lines, abnfName(rn)+" = "+body)
 	}
 
 	// Define each used token as its own ABNF rule, with `=` aligned for
@@ -1004,12 +1087,13 @@ func emitAbnfTerminal(
 	rsm map[string]*tabnas.RuleSpec,
 	tin tabnas.Tin,
 	recordUsed func(name, form string),
+	abnfName func(string) string,
 ) string {
 	fullName := j.TinName(tin)
 
 	if fullName != "" {
 		if _, ok := rsm[fullName]; ok {
-			return fullName
+			return abnfName(fullName)
 		}
 	}
 
@@ -1017,7 +1101,9 @@ func emitAbnfTerminal(
 	if name == "" {
 		name = fmt.Sprintf("T%d", tin)
 	}
-	name = strings.TrimPrefix(name, "#")
+	// Strip the '#' sigil first so '#NR' reserves 'NR' rather than being
+	// sanitised to '-NR' and then prefixed.
+	name = abnfName(strings.TrimPrefix(name, "#"))
 	recordUsed(name, abnfTokenForm(cfg, fixedSrc, tin, fullName))
 	return name
 }
@@ -1032,6 +1118,15 @@ func emitAbnfTerminal(
 // Mirrors the TS abnfTokenForm().
 func abnfTokenForm(cfg *tabnas.LexConfig, fixedSrc map[tabnas.Tin]string, tin tabnas.Tin, fullName string) string {
 	if lit, ok := fixedSrc[tin]; ok {
+		// RFC 5234: char-val = DQUOTE *(%x20-21 / %x23-7E) DQUOTE — so a
+		// literal holding a control character, a `"`, or anything above
+		// %x7E CANNOT go inside quotes. A token fixed to CR used to emit
+		// `CR = "<CR>"`, an unterminated char-val. Fall back to the numeric
+		// form, which has no such restriction (and is case-sensitive
+		// already, so it carries the `%s` meaning too).
+		if !charValSafe(lit) {
+			return numericVal(lit)
+		}
 		if hasAsciiLetter(lit) {
 			return `%s"` + lit + `"`
 		}
@@ -1184,6 +1279,36 @@ func hasAsciiLetter(s string) bool {
 		}
 	}
 	return false
+}
+
+// charValSafe reports whether every character of s may appear inside an
+// ABNF char-val: `char-val = DQUOTE *(%x20-21 / %x23-7E) DQUOTE`. Control
+// characters, DQUOTE itself, DEL, and anything non-ASCII are excluded.
+// Mirrors the TS regexp test in abnfTokenForm().
+func charValSafe(s string) bool {
+	for _, r := range s {
+		if r == 0x20 || r == 0x21 || (r >= 0x23 && r <= 0x7E) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// numericVal renders a literal as an ABNF num-val: `%x0D`, or
+// dot-concatenated for several characters (`%x0D.0A`). RFC 5234 puts no
+// character restriction on num-val, so it is the safe rendering for
+// anything char-val cannot hold. Mirrors the TS numericVal().
+func numericVal(lit string) string {
+	parts := make([]string, 0, len(lit))
+	for _, r := range lit {
+		hex := strings.ToUpper(strconv.FormatInt(int64(r), 16))
+		if len(hex)%2 != 0 {
+			hex = "0" + hex
+		}
+		parts = append(parts, hex)
+	}
+	return "%x" + strings.Join(parts, ".")
 }
 
 // sortedRuleNames returns the rule names of a spec map in stable order.

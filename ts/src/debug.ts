@@ -368,9 +368,53 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
 // cannot be represented (e.g. arbitrary match regexes) are emitted as
 // ABNF comments so the output stays valid and self-documenting, even
 // though such rules will not round-trip.
+// RFC 5234: `rulename = ALPHA *(ALPHA / DIGIT / "-")`. Engine rule names are
+// not so constrained — the abnf compiler synthesises `_gen1_star_term` and
+// `…$alt0`, and a regex token arrives as `RX___U0030__U0039`. Emitted
+// verbatim those are rejected by every conforming ABNF tool, so map each to
+// a legal name ONCE and reuse it for the production head and every reference.
+//
+// Returns a memoised mapper. Distinct source names can sanitise to the same
+// string (`a_b` and `a-b` both give `a-b`), so collisions get a numeric
+// suffix — without it the grammar would silently merge two rules.
+function abnfNamer(reserve: string[]): (name: string) => string {
+  const isLegal = (n: string): boolean => /^[A-Za-z][A-Za-z0-9-]*$/.test(n)
+  const cache = new Map<string, string>()
+  const taken = new Set<string>()
+
+  // Names that are ALREADY legal keep their spelling, and claim it up front:
+  // otherwise a sanitised synthetic could take `foo-bar` first and rename the
+  // user's real `foo-bar` rule out from under them.
+  for (const n of reserve) {
+    if (isLegal(n) && !taken.has(n)) {
+      taken.add(n)
+      cache.set(n, n)
+    }
+  }
+
+  return (name: string): string => {
+    const hit = cache.get(name)
+    if (undefined !== hit) return hit
+    let out = name.replace(/[^A-Za-z0-9-]/g, '-')
+    if (!/^[A-Za-z]/.test(out)) out = 'r' + out
+    if (taken.has(out)) {
+      let n = 2
+      while (taken.has(out + '-' + n)) n++
+      out = out + '-' + n
+    }
+    taken.add(out)
+    cache.set(name, out)
+    return out
+  }
+}
+
 function emitAbnf(tabnas: Tabnas): string {
   const cfg = tabnas.internal().config
   const rules = tabnas.rule() as Record<string, RuleSpec>
+
+  // Seeded with the rule names so user-authored ones are never displaced;
+  // token legend names are added as they are first referenced.
+  const abnfName = abnfNamer(Object.keys(rules))
 
   // bnf wraps grammars in a synthetic '__start__' rule (open .p -> the
   // real start, close matches #ZZ); skip it and lead with the real start.
@@ -440,13 +484,13 @@ function emitAbnf(tabnas: Tabnas): string {
         const inner = item
           .map(toTin)
           .filter((t: any): t is number => null != t && t !== endTin)
-          .map((t: number) => emitAbnfTerminal(tabnas, cfg, t, used))
+          .map((t: number) => emitAbnfTerminal(tabnas, cfg, t, used, abnfName))
         if (0 < inner.length) els.push('( ' + inner.join(' / ') + ' )')
         continue
       }
       const tin = toTin(item)
       if (null == tin || tin === endTin) continue
-      els.push(emitAbnfTerminal(tabnas, cfg, tin, used))
+      els.push(emitAbnfTerminal(tabnas, cfg, tin, used, abnfName))
     }
     const target =
       'string' === typeof alt.p ? alt.p : 'string' === typeof alt.r ? alt.r : null
@@ -485,15 +529,35 @@ function emitAbnf(tabnas: Tabnas): string {
   }
 
   // Full production body: like ruleSeq, but PRESERVES an empty open
-  // alternative (rendered as a trailing `/`) — essential for kept `*(…)`
-  // repetition rules, whose empty alt is what makes them zero-or-more.
+  // alternative — essential for kept `*(…)` repetition rules, whose empty
+  // alt is what makes them zero-or-more.
+  //
+  // The empty alternative is rendered by wrapping the rest in `[ … ]`, NOT
+  // as a trailing `/`. ABNF's grammar is
+  //   alternation = concatenation *(*c-wsp "/" *c-wsp concatenation)
+  // so every `/` must be followed by a concatenation: `x = A x /` is a
+  // syntax error, and every conforming ABNF tool rejects it. `@tabnas/abnf`
+  // happens to accept it, which is exactly why this went unnoticed — the
+  // round-trip test passed while the output was unusable anywhere else.
+  // `[ A x ]` says the same thing and is valid.
   const emitBody = (rs: any, seen: Set<string>): string => {
     const raw = (rs.def.open || []).map((a: any) => seqOfAlt(a, seen))
     const nonEmpty = [...new Set(raw.filter(Boolean))]
-    const parts = raw.some((x: string) => '' === x)
-      ? [...nonEmpty, '']
-      : nonEmpty
-    return (parts.join(' / ') + ' ' + closeCont(rs, seen)).trim()
+    const optional = raw.some((x: string) => '' === x)
+    const cont = closeCont(rs, seen)
+
+    // Nothing but an empty alternative. `x = ` is not a production at all,
+    // and ABNF has no epsilon terminal — but an empty char-val is legal
+    // (`char-val = DQUOTE *(%x20-21 / %x23-7E) DQUOTE` permits zero chars)
+    // and matches exactly the empty string, which is what this rule does.
+    if (optional && 0 === nonEmpty.length && !cont) {
+      return '""'
+    }
+
+    const body = optional
+      ? '[ ' + nonEmpty.join(' / ') + ' ]'
+      : nonEmpty.join(' / ')
+    return (body + ' ' + cont).trim()
   }
 
   // Inline a reference: a user rule stays a bareword; a synthetic rule folds
@@ -501,12 +565,12 @@ function emitAbnf(tabnas: Tabnas): string {
   const inlineRef = (name: string, seen: Set<string>): string => {
     // A user rule or a kept (non-foldable, e.g. repetition) synthetic rule
     // stays a bareword reference; only foldable synthetics are inlined.
-    if (!isFoldable(name)) return name
+    if (!isFoldable(name)) return abnfName(name)
     if (seen.has(name)) return '' // foldable loop-back — terminates the loop
     const s2 = new Set(seen)
     s2.add(name)
     const rs: any = rules[name]
-    if (!rs) return name
+    if (!rs) return abnfName(name)
     if (name.includes('_opt')) {
       return '[ ' + ruleSeq(rs, s2) + ' ]'
     }
@@ -538,7 +602,7 @@ function emitAbnf(tabnas: Tabnas): string {
   const lines: string[] = []
   for (const rn of ordered) {
     const body = emitBody(rules[rn], new Set([rn]))
-    lines.push(rn + ' = ' + body)
+    lines.push(abnfName(rn) + ' = ' + body)
   }
 
   // Define each token as its own ABNF rule (named terminals), after the
@@ -562,15 +626,18 @@ function emitAbnfTerminal(
   cfg: Config,
   tin: number,
   used: Map<string, string>,
+  abnfName: (name: string) => string,
 ): string {
   const fullName: string = tabnas.token[tin]
 
   const rules: any = tabnas.rule()
   if (fullName && rules[fullName]) {
-    return fullName
+    return abnfName(fullName)
   }
 
-  const name = (fullName || 'T' + tin).replace(/^#/, '')
+  // Strip the '#' sigil first so '#NR' reserves 'NR' rather than being
+  // sanitised to '-NR' and then prefixed.
+  const name = abnfName((fullName || 'T' + tin).replace(/^#/, ''))
   if (!used.has(name)) {
     used.set(name, abnfTokenForm(cfg, tin, fullName))
   }
@@ -585,9 +652,15 @@ function emitAbnfTerminal(
 function abnfTokenForm(cfg: Config, tin: number, fullName: string): string {
   const fixedLit = (cfg.fixed.ref as any)[tin]
   if ('string' === typeof fixedLit) {
-    return /[A-Za-z]/.test(fixedLit)
-      ? '%s"' + fixedLit + '"'
-      : '"' + fixedLit + '"'
+    // RFC 5234: char-val = DQUOTE *(%x20-21 / %x23-7E) DQUOTE — so a
+    // literal holding a control character, a `"`, or anything above %x7E
+    // CANNOT go inside quotes. A token fixed to CRLF used to emit
+    // `CRLF = "<CR>"`, an unterminated char-val. Fall back to the numeric
+    // form, which has no such restriction (and is case-sensitive already,
+    // so it carries the `%s` meaning too).
+    return /^[\x20\x21\x23-\x7E]*$/.test(fixedLit)
+      ? (/[A-Za-z]/.test(fixedLit) ? '%s"' + fixedLit + '"' : '"' + fixedLit + '"')
+      : numericVal(fixedLit)
   }
 
   const re = (cfg.match.token as any)[tin] ?? (cfg.match.token as any)['' + tin]
@@ -612,6 +685,22 @@ function abnfTokenForm(cfg: Config, tin: number, fullName: string): string {
     ZZ: 'end-of-source',
   }
   return '<' + (desc[bare] || 'built-in ' + bare) + '>'
+}
+
+// A literal as an ABNF num-val: `%x0D`, or dot-concatenated for several
+// characters (`%x0D.0A`). RFC 5234 gives this no character restriction, so
+// it is the safe rendering for anything char-val cannot hold.
+function numericVal(lit: string): string {
+  return (
+    '%x' +
+    [...lit]
+      .map((ch) => {
+        const cp = ch.codePointAt(0) as number
+        const hex = cp.toString(16).toUpperCase()
+        return hex.length % 2 ? '0' + hex : hex
+      })
+      .join('.')
+  )
 }
 
 // Translate the anchored RegExp bnf installs for a match token back to
