@@ -8,15 +8,38 @@ of intentional TS/Go differences.
 - Source: `debug.go`. Provides `Debug` (a `tabnas.Plugin`), `Describe(j)`
   (a package function), and `Defaults` (a `map[string]any`).
 - Tests: `debug_test.go`, mirroring `../ts/test/debug.test.js`.
-- Module `github.com/tabnas/debug/go`. The engine module
-  `github.com/tabnas/parser/go` is required with a `replace` pointing at
-  `../vendor/tabnas-parser/go`; fetch it with `../scripts/fetch-parser.sh`
-  first.
+- Module `github.com/tabnas/debug/go`, requiring the engine module
+  `github.com/tabnas/parser/go`.
 
 ```bash
 TABNAS_PARSER_SKIP_TS_BUILD=1 ../scripts/fetch-parser.sh
 go build ./... && go vet ./... && go test ./...
 ```
+
+### A local green is not a CI green
+
+**`go.mod` carries no `replace`, so the commands above resolve the engine
+at its pinned published version from the module proxy** — not the
+`vendor/` copy `fetch-parser.sh` just downloaded, and not the sibling
+checkout CI builds. Anything added to the engine on `main` but not yet
+released is invisible here and enforced there.
+
+That gap has already cost one red build: a test bound a fixed literal to
+`#AA`, which an unreleased engine change rejects (matcher tokens cannot be
+rebound). It passed locally and panicked in CI.
+
+Before pushing a Go change, re-run against the engine CI actually uses:
+
+```bash
+go mod edit -replace github.com/tabnas/parser/go=/path/to/parser/go
+go test ./...
+go mod edit -dropreplace github.com/tabnas/parser/go    # do not commit the replace
+```
+
+The same gap exists on the TypeScript side — `ts/package.json` asks for
+`"@tabnas/parser": "*"`, which npm resolves from the registry — so point
+`ts/node_modules/@tabnas/parser` at `../vendor/tabnas-parser/ts` to test
+against `main` there too.
 
 ## API notes
 

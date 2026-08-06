@@ -695,10 +695,10 @@ func TestAbnfNumericValShapes(t *testing.T) {
 func TestAbnfEmptyOpenWithContinuation(t *testing.T) {
 	a := "a"
 	j := tabnas.Make(tabnas.Options{
-		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#AA": &a}},
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#XA": &a}},
 		Rule:  &tabnas.RuleOptions{Start: "top"},
 	})
-	at := j.Token("#AA")
+	at := j.Token("#XA")
 	zz := j.Token("#ZZ")
 
 	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
@@ -730,11 +730,11 @@ func TestAbnfEmptyOpenWithContinuation(t *testing.T) {
 func TestAbnfRulenameCollisionIsCaseInsensitive(t *testing.T) {
 	a, b := "a", "b"
 	j := tabnas.Make(tabnas.Options{
-		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#AA": &a, "#BB": &b}},
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#XA": &a, "#XB": &b}},
 		Rule:  &tabnas.RuleOptions{Start: "top"},
 	})
-	at := j.Token("#AA")
-	bt := j.Token("#BB")
+	at := j.Token("#XA")
+	bt := j.Token("#XB")
 	zz := j.Token("#ZZ")
 
 	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {

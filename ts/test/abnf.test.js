@@ -270,16 +270,16 @@ describe('abnf edge shapes', () => {
   // to emit `x = [  ] Y`.
   it('emits the continuation alone, not an empty option', () => {
     const out = emitOf((tn) => {
-      tn.options({ fixed: { token: { '#AA': 'a', '#BB': 'b' } }, rule: { start: 'top' } })
-      tn.token('#AA')
-      tn.token('#BB')
+      tn.options({ fixed: { token: { '#XA': 'a', '#XB': 'b' } }, rule: { start: 'top' } })
+      tn.token('#XA')
+      tn.token('#XB')
       tn.rule('top', (rs) => rs
         .open([{ p: 'inner' }])
         .close([{ s: '#ZZ' }]))
       // inner: an empty open alternative, plus a close continuation.
       tn.rule('inner', (rs) => rs
         .open([{}])
-        .close([{ s: '#AA' }, { s: '#ZZ' }]))
+        .close([{ s: '#XA' }, { s: '#ZZ' }]))
     })
 
     assert.ok(!/\[\s*\]/.test(out), 'no empty `[ ]` option:\n' + out)
@@ -291,14 +291,14 @@ describe('abnf edge shapes', () => {
   // `Foo-Bar` used to emit two definitions of the same rule.
   it('resolves rulename collisions case-insensitively', () => {
     const out = emitOf((tn) => {
-      tn.options({ fixed: { token: { '#AA': 'a', '#BB': 'b' } }, rule: { start: 'top' } })
-      tn.token('#AA')
-      tn.token('#BB')
+      tn.options({ fixed: { token: { '#XA': 'a', '#XB': 'b' } }, rule: { start: 'top' } })
+      tn.token('#XA')
+      tn.token('#XB')
       tn.rule('top', (rs) => rs
-        .open([{ s: '#AA', p: 'Foo-Bar' }, { s: '#BB', p: 'foo_bar' }])
+        .open([{ s: '#XA', p: 'Foo-Bar' }, { s: '#XB', p: 'foo_bar' }])
         .close([{ s: '#ZZ' }]))
-      tn.rule('Foo-Bar', (rs) => rs.open([{ s: '#AA' }]).close([{}]))
-      tn.rule('foo_bar', (rs) => rs.open([{ s: '#BB' }]).close([{}]))
+      tn.rule('Foo-Bar', (rs) => rs.open([{ s: '#XA' }]).close([{}]))
+      tn.rule('foo_bar', (rs) => rs.open([{ s: '#XB' }]).close([{}]))
     })
 
     const heads = out
