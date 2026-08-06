@@ -76,6 +76,11 @@ requires a concatenation after every `/`. And rule names are mapped to
 is emitted as `r-gen1-star-T`, using the same name for the production and
 every reference to it.
 
+The target dialect is RFC 5234 as updated by
+[RFC 7405](https://www.rfc-editor.org/rfc/rfc7405): everything emitted is
+RFC 5234 except the `%s"…"` case-sensitive literal, which is 7405's
+addition and what current ABNF tooling implements.
+
 The Go emitter reads only the running engine. Go has no ABNF library port,
 so there is nothing to depend on; the independence the TypeScript port
 enforces (never importing `@tabnas/abnf`) is automatic here.

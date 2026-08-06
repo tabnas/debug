@@ -252,3 +252,66 @@ describe('abnf', () => {
     assert.ok(/\bHI\b\s*=\s*"hi"/.test(desc), 'has token definition')
   })
 })
+
+// Two shapes the ABNF compiler does not produce, so they are built directly
+// on the engine. Both were raised in review on PR #21 and both emitted
+// invalid ABNF.
+describe('abnf edge shapes', () => {
+  const emitOf = (build) => {
+    const tn = new Tabnas()
+    tn.use(Debug, { print: false, trace: false })
+    build(tn)
+    return tn.debug.abnf()
+  }
+
+  // `option = "[" *c-wsp alternation *c-wsp "]"`, and `alternation` needs at
+  // least one concatenation — so `[ ]` is not a legal option. A rule whose
+  // only open alternative is empty but which HAS a close continuation used
+  // to emit `x = [  ] Y`.
+  it('emits the continuation alone, not an empty option', () => {
+    const out = emitOf((tn) => {
+      tn.options({ fixed: { token: { '#AA': 'a', '#BB': 'b' } }, rule: { start: 'top' } })
+      tn.token('#AA')
+      tn.token('#BB')
+      tn.rule('top', (rs) => rs
+        .open([{ p: 'inner' }])
+        .close([{ s: '#ZZ' }]))
+      // inner: an empty open alternative, plus a close continuation.
+      tn.rule('inner', (rs) => rs
+        .open([{}])
+        .close([{ s: '#AA' }, { s: '#ZZ' }]))
+    })
+
+    assert.ok(!/\[\s*\]/.test(out), 'no empty `[ ]` option:\n' + out)
+    assertRfc5234Shape(out)
+  })
+
+  // RFC 5234 §2.1: rule names are case-insensitive, so `Foo-Bar` and
+  // `foo-bar` are ONE rule. Sanitising `foo_bar` beside a reserved
+  // `Foo-Bar` used to emit two definitions of the same rule.
+  it('resolves rulename collisions case-insensitively', () => {
+    const out = emitOf((tn) => {
+      tn.options({ fixed: { token: { '#AA': 'a', '#BB': 'b' } }, rule: { start: 'top' } })
+      tn.token('#AA')
+      tn.token('#BB')
+      tn.rule('top', (rs) => rs
+        .open([{ s: '#AA', p: 'Foo-Bar' }, { s: '#BB', p: 'foo_bar' }])
+        .close([{ s: '#ZZ' }]))
+      tn.rule('Foo-Bar', (rs) => rs.open([{ s: '#AA' }]).close([{}]))
+      tn.rule('foo_bar', (rs) => rs.open([{ s: '#BB' }]).close([{}]))
+    })
+
+    const heads = out
+      .split('\n')
+      .map((l) => (l.match(/^([^\s=]+)\s*=/) || [])[1])
+      .filter(Boolean)
+      .map((n) => n.toLowerCase())
+
+    assert.strictEqual(
+      new Set(heads).size,
+      heads.length,
+      'two productions define the same rule (case-insensitively):\n' + out,
+    )
+    assertRfc5234Shape(out)
+  })
+})

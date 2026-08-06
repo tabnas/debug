@@ -380,14 +380,21 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
 function abnfNamer(reserve: string[]): (name: string) => string {
   const isLegal = (n: string): boolean => /^[A-Za-z][A-Za-z0-9-]*$/.test(n)
   const cache = new Map<string, string>()
+
+  // RFC 5234 §2.1: "ABNF rule names are case-insensitive." So `Foo-Bar` and
+  // `foo-bar` ARE the same rule, and the collision check has to fold case —
+  // comparing exact spellings would let a sanitised `foo_bar` land beside a
+  // reserved `Foo-Bar` and emit two definitions of one rule.
   const taken = new Set<string>()
+  const claim = (n: string): void => { taken.add(n.toLowerCase()) }
+  const isTaken = (n: string): boolean => taken.has(n.toLowerCase())
 
   // Names that are ALREADY legal keep their spelling, and claim it up front:
   // otherwise a sanitised synthetic could take `foo-bar` first and rename the
   // user's real `foo-bar` rule out from under them.
   for (const n of reserve) {
-    if (isLegal(n) && !taken.has(n)) {
-      taken.add(n)
+    if (isLegal(n) && !isTaken(n)) {
+      claim(n)
       cache.set(n, n)
     }
   }
@@ -397,12 +404,12 @@ function abnfNamer(reserve: string[]): (name: string) => string {
     if (undefined !== hit) return hit
     let out = name.replace(/[^A-Za-z0-9-]/g, '-')
     if (!/^[A-Za-z]/.test(out)) out = 'r' + out
-    if (taken.has(out)) {
+    if (isTaken(out)) {
       let n = 2
-      while (taken.has(out + '-' + n)) n++
+      while (isTaken(out + '-' + n)) n++
       out = out + '-' + n
     }
-    taken.add(out)
+    claim(out)
     cache.set(name, out)
     return out
   }
@@ -546,12 +553,17 @@ function emitAbnf(tabnas: Tabnas): string {
     const optional = raw.some((x: string) => '' === x)
     const cont = closeCont(rs, seen)
 
-    // Nothing but an empty alternative. `x = ` is not a production at all,
-    // and ABNF has no epsilon terminal — but an empty char-val is legal
-    // (`char-val = DQUOTE *(%x20-21 / %x23-7E) DQUOTE` permits zero chars)
-    // and matches exactly the empty string, which is what this rule does.
-    if (optional && 0 === nonEmpty.length && !cont) {
-      return '""'
+    // Nothing but an empty alternative. `option = "[" *c-wsp alternation
+    // *c-wsp "]"` and `alternation` needs at least one concatenation, so
+    // `[ ]` is not a legal option — there is nothing to make optional.
+    //
+    // With a continuation, the open contributes nothing and the rule IS its
+    // continuation. Without one, `x = ` is not a production at all, and ABNF
+    // has no epsilon terminal — but an empty char-val is legal (`char-val =
+    // DQUOTE *(%x20-21 / %x23-7E) DQUOTE` permits zero chars) and matches
+    // exactly the empty string, which is what this rule does.
+    if (optional && 0 === nonEmpty.length) {
+      return cont ? cont : '""'
     }
 
     const body = optional
@@ -649,6 +661,12 @@ function emitAbnfTerminal(
 //   - /^<lit>/i (letters) -> "<lit>"     (case-insensitive literal)
 //   - /^[\uXXXX-\uYYYY]/  -> %xXX-YY     (char range)
 //   - built-in matcher    -> <number> / <string> / ...   (lexer-provided)
+//
+// The `%s` prefix is RFC 7405, which updates RFC 5234 — it is the only
+// construct emitted here that RFC 5234 alone does not define. It is kept
+// because it is what every current ABNF tool implements and it stays
+// readable; `%x48.69` would be pure RFC 5234 but unreadable, and the
+// alternative (a bare char-val) would silently lose case-sensitivity.
 function abnfTokenForm(cfg: Config, tin: number, fullName: string): string {
   const fixedLit = (cfg.fixed.ref as any)[tin]
   if ('string' === typeof fixedLit) {

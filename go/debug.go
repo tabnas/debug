@@ -686,7 +686,14 @@ var (
 // Mirrors the TS abnfNamer().
 func abnfNamer(reserve []string) func(string) string {
 	cache := map[string]string{}
+
+	// RFC 5234 §2.1: "ABNF rule names are case-insensitive." So `Foo-Bar`
+	// and `foo-bar` ARE the same rule, and the collision check has to fold
+	// case — comparing exact spellings would let a sanitised `foo_bar` land
+	// beside a reserved `Foo-Bar` and emit two definitions of one rule.
 	taken := map[string]bool{}
+	claim := func(n string) { taken[strings.ToLower(n)] = true }
+	isTaken := func(n string) bool { return taken[strings.ToLower(n)] }
 
 	// Names that are ALREADY legal keep their spelling and claim it up
 	// front; otherwise a sanitised synthetic could take `foo-bar` first and
@@ -695,8 +702,8 @@ func abnfNamer(reserve []string) func(string) string {
 	sorted := append([]string(nil), reserve...)
 	sort.Strings(sorted)
 	for _, n := range sorted {
-		if abnfLegalName.MatchString(n) && !taken[n] {
-			taken[n] = true
+		if abnfLegalName.MatchString(n) && !isTaken(n) {
+			claim(n)
 			cache[n] = n
 		}
 	}
@@ -709,14 +716,14 @@ func abnfNamer(reserve []string) func(string) string {
 		if !abnfLeadingAlpha.MatchString(out) {
 			out = "r" + out
 		}
-		if taken[out] {
+		if isTaken(out) {
 			n := 2
-			for taken[out+"-"+strconv.Itoa(n)] {
+			for isTaken(out + "-" + strconv.Itoa(n)) {
 				n++
 			}
 			out = out + "-" + strconv.Itoa(n)
 		}
-		taken[out] = true
+		claim(out)
 		cache[name] = out
 		return out
 	}
@@ -943,11 +950,19 @@ func emitAbnf(j *tabnas.Tabnas) string {
 		cont := closeCont(rs, seen)
 		optional := keepEmpty && hasEmpty
 
-		// Nothing but an empty alternative. `x = ` is not a production, and
-		// ABNF has no epsilon terminal — but an empty char-val is legal
+		// Nothing but an empty alternative. `option = "[" *c-wsp alternation
+		// *c-wsp "]"` and `alternation` needs at least one concatenation, so
+		// `[ ]` is not a legal option — there is nothing to make optional.
+		//
+		// With a continuation, the open contributes nothing and the rule IS
+		// its continuation. Without one, `x = ` is not a production at all,
+		// and ABNF has no epsilon terminal — but an empty char-val is legal
 		// (char-val permits zero chars) and matches the empty string, which
 		// is exactly what this rule does.
-		if optional && len(parts) == 0 && cont == "" {
+		if optional && len(parts) == 0 {
+			if cont != "" {
+				return cont
+			}
 			return `""`
 		}
 
@@ -1114,6 +1129,12 @@ func emitAbnfTerminal(
 //   - /^<lit>/i (letters) -> "<lit>"     (case-insensitive literal)
 //   - char range          -> %xLO-HI
 //   - built-in matcher     -> <number> / <string> / ...   (lexer-provided)
+//
+// The `%s` prefix is RFC 7405, which updates RFC 5234 — it is the only
+// construct emitted here that RFC 5234 alone does not define. It is kept
+// because it is what every current ABNF tool implements and it stays
+// readable; `%x48.69` would be pure RFC 5234 but unreadable, and the
+// alternative (a bare char-val) would silently lose case-sensitivity.
 //
 // Mirrors the TS abnfTokenForm().
 func abnfTokenForm(cfg *tabnas.LexConfig, fixedSrc map[tabnas.Tin]string, tin tabnas.Tin, fullName string) string {

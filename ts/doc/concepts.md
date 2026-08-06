@@ -129,6 +129,13 @@ Both of those are about the output being usable *outside* this project.
 Re-compiling with `@tabnas/abnf` is not evidence of validity — it is
 lenient about exactly these two things.
 
+**The target dialect is RFC 5234 as updated by
+[RFC 7405](https://www.rfc-editor.org/rfc/rfc7405).** Everything emitted is
+RFC 5234 except the `%s"…"` case-sensitive literal, which is 7405's
+addition. That is what current ABNF tooling implements, and the pure-5234
+alternatives are worse: `%x48.69` is unreadable, and a bare char-val would
+silently lose the case-sensitivity.
+
 Constructs ABNF cannot express — an arbitrary match regex — are emitted as
 ABNF comments (`; /.../`) rather than dropped. The output stays valid
 ABNF text and self-documents what was lost, but such a grammar does not

@@ -685,3 +685,93 @@ func TestAbnfNumericValShapes(t *testing.T) {
 	}
 	assertRfc5234Shape(t, out)
 }
+
+// TestAbnfEmptyOpenWithContinuation pins that a rule whose only open
+// alternative is empty, but which HAS a close continuation, emits the
+// continuation alone. `option = "[" *c-wsp alternation *c-wsp "]"` and
+// `alternation` needs at least one concatenation, so `[ ]` is not a legal
+// option — this used to emit `inner = [  ] AA`. Parity with the TS
+// "emits the continuation alone, not an empty option" case.
+func TestAbnfEmptyOpenWithContinuation(t *testing.T) {
+	a := "a"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#AA": &a}},
+		Rule:  &tabnas.RuleOptions{Start: "top"},
+	})
+	at := j.Token("#AA")
+	zz := j.Token("#ZZ")
+
+	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{P: "inner"})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+	j.Rule("inner", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{}) // empty open alternative
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{at}}})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+	if emptyOption.MatchString(out) {
+		t.Errorf("empty `[ ]` option in:\n%s", out)
+	}
+	assertRfc5234Shape(t, out)
+}
+
+// TestAbnfRulenameCollisionIsCaseInsensitive pins RFC 5234 §2.1: rule names
+// are case-insensitive, so `Foo-Bar` and `foo-bar` are ONE rule. Sanitising
+// `foo_bar` beside a reserved `Foo-Bar` used to emit two definitions of the
+// same rule. Parity with the TS case.
+func TestAbnfRulenameCollisionIsCaseInsensitive(t *testing.T) {
+	a, b := "a", "b"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#AA": &a, "#BB": &b}},
+		Rule:  &tabnas.RuleOptions{Start: "top"},
+	})
+	at := j.Token("#AA")
+	bt := j.Token("#BB")
+	zz := j.Token("#ZZ")
+
+	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{at}}, P: "Foo-Bar"})
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{bt}}, P: "foo_bar"})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+	j.Rule("Foo-Bar", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{at}}})
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+	j.Rule("foo_bar", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{bt}}})
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		head := abnfHeadName.FindStringSubmatch(line)
+		if head == nil {
+			continue
+		}
+		key := strings.ToLower(head[1])
+		if seen[key] {
+			t.Errorf("two productions define the same rule (case-insensitively): %q in:\n%s", head[1], out)
+		}
+		seen[key] = true
+	}
+	assertRfc5234Shape(t, out)
+}
+
+var emptyOption = regexp.MustCompile(`\[\s*\]`)
