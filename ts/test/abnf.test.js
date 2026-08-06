@@ -48,6 +48,37 @@ function recognise(spec, input) {
   }
 }
 
+// Assert the emitted text obeys the parts of RFC 5234 that were previously
+// violated silently. @tabnas/abnf is lenient about both, so re-compiling is
+// NOT evidence of validity — the trailing-`/` bug survived this whole suite
+// because every check downstream went through the tolerant parser.
+//
+//   rulename    = ALPHA *(ALPHA / DIGIT / "-")
+//   alternation = concatenation *(*c-wsp "/" *c-wsp concatenation)
+//
+// so `_gen1_star_x` is not a legal name, and `x = A x /` is not a legal body.
+function assertRfc5234Shape(abnf1) {
+  for (const line of abnf1.split('\n')) {
+    if ('' === line.trim() || line.trim().startsWith(';')) continue
+
+    assert.ok(
+      !/\/\s*$/.test(line),
+      'dangling `/` — every `/` needs a concatenation after it:\n' +
+      line + '\n--- in ---\n' + abnf1,
+    )
+
+    const head = line.match(/^([^\s=]+)\s*=/)
+    if (head) {
+      assert.match(
+        head[1],
+        /^[A-Za-z][A-Za-z0-9-]*$/,
+        'rulename is not ALPHA *(ALPHA / DIGIT / "-"):\n' +
+        line + '\n--- in ---\n' + abnf1,
+      )
+    }
+  }
+}
+
 // Assert the full round trip for one sample grammar over a set of inputs.
 function assertRoundTrip(abnf0, inputs) {
   const g1 = abnfConvert(abnf0)
@@ -59,6 +90,7 @@ function assertRoundTrip(abnf0, inputs) {
 
   assert.strictEqual(typeof abnf1, 'string', 'abnf() returns a string')
   assert.ok(abnf1.length > 0, 'abnf() output is non-empty')
+  assertRfc5234Shape(abnf1)
 
   let g2
   try {
@@ -112,6 +144,21 @@ describe('abnf', () => {
     assertRoundTrip('g = %x30-39', ['5', '0', 'a', ''])
   })
 
+  // `char-val = DQUOTE *(%x20-21 / %x23-7E) DQUOTE`, so a token fixed to a
+  // control character cannot be quoted — it has to come back as a num-val.
+  // Quoting it produced `CRLF = "<CR>"`, an unterminated char-val.
+  it('round-trips a control-character literal as %x, not a quoted char-val', () => {
+    // `emit` is defined further down the describe body; `it` callbacks run
+    // after that body completes, so it is initialised by the time this runs.
+    const out = emit('csv = row *( CR row )\nrow = "x"\nCR = %x0D')
+    assert.match(out, /^CR\s+= %x0D$/m, 'control char emitted as num-val:\n' + out)
+    assertRfc5234Shape(out)
+    assertRoundTrip(
+      'csv = row *( CR row )\nrow = "x"\nCR = %x0D',
+      ['x', 'x\rx', 'x\rx\rx', '', 'y'],
+    )
+  })
+
   // Extra coverage beyond the required minimum: these all round-trip.
   it('round-trips ref-only alternation (FIRST-set peek)', () => {
     assertRoundTrip(
@@ -123,6 +170,16 @@ describe('abnf', () => {
   it('round-trips repetition (star and plus)', () => {
     assertRoundTrip('rep = *"a"', ['', 'a', 'aa', 'b'])
     assertRoundTrip('rep = 1*"a"', ['', 'a', 'aa', 'b'])
+  })
+
+  // Repetition inside a group is what produces the deepest synthetic names
+  // (`_gen2_star__gen1_group$alt0$step1`) — the shape most likely to emit
+  // an illegal rulename.
+  it('round-trips repetition inside a group', () => {
+    assertRoundTrip(
+      'list = "[" *( "," item ) "]"\nitem = "x"',
+      ['[]', '[,x]', '[,x,x]', '[x]', '['],
+    )
   })
 
   it('round-trips optional (group and prefix)', () => {
@@ -160,19 +217,29 @@ describe('abnf', () => {
       out.split('\n').includes('add = NR [ PL add ]'),
       'optional folded to `NR [ PL add ]`:\n' + out,
     )
-    assert.ok(!/_gen/.test(out), 'no synthetic _gen production leaked:\n' + out)
+    // Matches the sanitised spelling too: `_gen1_star_x` now emits as
+    // `r-gen1-star-x`, so a bare /_gen/ would pass without testing anything.
+    assert.ok(
+      !/[_-]gen\d/.test(out),
+      'no synthetic gen production leaked:\n' + out,
+    )
   })
 
   it('keeps repetition as a production (does not fold *)', () => {
     const out = emit('rep = *PL\nPL = "+"')
     assert.ok(
-      /^_gen\d+_star_PL = /m.test(out),
+      /^r-gen\d+-star-PL = /m.test(out),
       'star kept as its own production:\n' + out,
     )
+    // Zero-or-more IS the empty alternative, and it is rendered as `[ … ]`.
+    // NOT as a trailing `/`: RFC 5234's `alternation` requires a
+    // concatenation after every `/`, so `x = PL x /` is a syntax error that
+    // @tabnas/abnf happens to accept and other ABNF tools do not.
     assert.ok(
-      / \/$/m.test(out),
-      'zero-or-more empty alternative preserved as a trailing `/`:\n' + out,
+      /^r-gen\d+-star-PL = \[ PL r-gen\d+-star-PL \]$/m.test(out),
+      'zero-or-more empty alternative rendered as `[ … ]`:\n' + out,
     )
+    assert.ok(!/\/\s*$/m.test(out), 'no dangling `/`:\n' + out)
   })
 
   it('describe() includes an ABNF section', () => {
@@ -183,5 +250,68 @@ describe('abnf', () => {
     assert.ok(desc.includes('========= ABNF ========='), 'has ABNF header')
     assert.ok(desc.includes('greet = HI / HELLO'), 'has emitted ABNF rule')
     assert.ok(/\bHI\b\s*=\s*"hi"/.test(desc), 'has token definition')
+  })
+})
+
+// Two shapes the ABNF compiler does not produce, so they are built directly
+// on the engine. Both were raised in review on PR #21 and both emitted
+// invalid ABNF.
+describe('abnf edge shapes', () => {
+  const emitOf = (build) => {
+    const tn = new Tabnas()
+    tn.use(Debug, { print: false, trace: false })
+    build(tn)
+    return tn.debug.abnf()
+  }
+
+  // `option = "[" *c-wsp alternation *c-wsp "]"`, and `alternation` needs at
+  // least one concatenation — so `[ ]` is not a legal option. A rule whose
+  // only open alternative is empty but which HAS a close continuation used
+  // to emit `x = [  ] Y`.
+  it('emits the continuation alone, not an empty option', () => {
+    const out = emitOf((tn) => {
+      tn.options({ fixed: { token: { '#XA': 'a', '#XB': 'b' } }, rule: { start: 'top' } })
+      tn.token('#XA')
+      tn.token('#XB')
+      tn.rule('top', (rs) => rs
+        .open([{ p: 'inner' }])
+        .close([{ s: '#ZZ' }]))
+      // inner: an empty open alternative, plus a close continuation.
+      tn.rule('inner', (rs) => rs
+        .open([{}])
+        .close([{ s: '#XA' }, { s: '#ZZ' }]))
+    })
+
+    assert.ok(!/\[\s*\]/.test(out), 'no empty `[ ]` option:\n' + out)
+    assertRfc5234Shape(out)
+  })
+
+  // RFC 5234 §2.1: rule names are case-insensitive, so `Foo-Bar` and
+  // `foo-bar` are ONE rule. Sanitising `foo_bar` beside a reserved
+  // `Foo-Bar` used to emit two definitions of the same rule.
+  it('resolves rulename collisions case-insensitively', () => {
+    const out = emitOf((tn) => {
+      tn.options({ fixed: { token: { '#XA': 'a', '#XB': 'b' } }, rule: { start: 'top' } })
+      tn.token('#XA')
+      tn.token('#XB')
+      tn.rule('top', (rs) => rs
+        .open([{ s: '#XA', p: 'Foo-Bar' }, { s: '#XB', p: 'foo_bar' }])
+        .close([{ s: '#ZZ' }]))
+      tn.rule('Foo-Bar', (rs) => rs.open([{ s: '#XA' }]).close([{}]))
+      tn.rule('foo_bar', (rs) => rs.open([{ s: '#XB' }]).close([{}]))
+    })
+
+    const heads = out
+      .split('\n')
+      .map((l) => (l.match(/^([^\s=]+)\s*=/) || [])[1])
+      .filter(Boolean)
+      .map((n) => n.toLowerCase())
+
+    assert.strictEqual(
+      new Set(heads).size,
+      heads.length,
+      'two productions define the same rule (case-insensitively):\n' + out,
+    )
+    assertRfc5234Shape(out)
   })
 })

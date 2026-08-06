@@ -4,6 +4,7 @@ package tabnasdebug_test
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -537,9 +538,15 @@ func buildAbnfStarGrammar(t *testing.T) *tabnas.Tabnas {
 
 // TestAbnfKeepsRepetitionProduction is the negative case: a `_gen…_star_…`
 // synthetic is NOT folded. It stays a bareword reference in its parent and
-// is emitted as its own production, whose empty open alternative is
-// preserved as a trailing `/` (the zero-or-more marker). Parity with the TS
-// isFoldable() exclusion of `_star`/`_plus`/`$alt`.
+// is emitted as its own production, whose empty open alternative marks it
+// zero-or-more. Parity with the TS isFoldable() exclusion of
+// `_star`/`_plus`/`$alt`.
+//
+// Two things it pins beyond the folding rule, both required by RFC 5234:
+// the empty alternative renders as `[ … ]` rather than a trailing `/`
+// (`alternation` needs a concatenation after every `/`), and the synthetic
+// name is sanitised to a legal `rulename` (ALPHA *(ALPHA / DIGIT / "-")),
+// so `_gen1_star_T` is emitted as `r-gen1-star-T`.
 func TestAbnfKeepsRepetitionProduction(t *testing.T) {
 	j := buildAbnfStarGrammar(t)
 
@@ -548,15 +555,223 @@ func TestAbnfKeepsRepetitionProduction(t *testing.T) {
 		t.Fatalf("Abnf returned error: %v", err)
 	}
 
-	want := "rep = _gen1_star_T\n" +
-		"_gen1_star_T = T /\n" +
+	want := "rep = r-gen1-star-T\n" +
+		"r-gen1-star-T = [ T ]\n" +
 		"\n" +
 		"T = \"+\""
 	if out != want {
 		t.Errorf("Abnf repetition mismatch\n--- got ---\n%s\n--- want ---\n%s", out, want)
 	}
 	// The star rule must survive as a production (not inlined away).
-	if !strings.Contains(out, "_gen1_star_T = T /") {
+	if !strings.Contains(out, "r-gen1-star-T = [ T ]") {
 		t.Errorf("repetition production was not kept:\n%s", out)
 	}
+	assertRfc5234Shape(t, out)
 }
+
+// assertRfc5234Shape checks the parts of RFC 5234 that emitAbnf previously
+// violated silently:
+//
+//	rulename    = ALPHA *(ALPHA / DIGIT / "-")
+//	alternation = concatenation *(*c-wsp "/" *c-wsp concatenation)
+//
+// so `_gen1_star_x` is not a legal name and `x = A x /` is not a legal body.
+// Mirrors the TS assertRfc5234Shape() in ../ts/test/abnf.test.js.
+func assertRfc5234Shape(t *testing.T, out string) {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, ";") {
+			continue
+		}
+		if strings.HasSuffix(trimmed, "/") {
+			t.Errorf("dangling `/` — every `/` needs a concatenation after it:\n%s\n--- in ---\n%s", line, out)
+		}
+		if head := abnfHeadName.FindStringSubmatch(line); head != nil {
+			if !abnfLegalRulename.MatchString(head[1]) {
+				t.Errorf("rulename is not ALPHA *(ALPHA / DIGIT / %q):\n%s\n--- in ---\n%s", "-", line, out)
+			}
+		}
+	}
+}
+
+var (
+	abnfHeadName      = regexp.MustCompile(`^([^\s=]+)\s*=`)
+	abnfLegalRulename = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
+)
+
+// TestAbnfControlCharLiteralIsNumVal pins the num-val fallback for a fixed
+// token whose literal cannot go inside quotes. RFC 5234 has
+//
+//	char-val = DQUOTE *(%x20-21 / %x23-7E) DQUOTE
+//
+// so a control character, a DQUOTE, or anything above %x7E has to come back
+// as `%xNN` — quoting a CR emitted `CR = "<CR>"`, an unterminated char-val.
+// Parity with the TS abnfTokenForm() char-val guard.
+func TestAbnfControlCharLiteralIsNumVal(t *testing.T) {
+	cr := "\r"
+	quote := `"`
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{
+			"#CR": &cr,
+			"#DQ": &quote,
+		}},
+		Rule: &tabnas.RuleOptions{Start: "top"},
+	})
+	crt := j.Token("#CR")
+	dqt := j.Token("#DQ")
+
+	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{crt}, {dqt}}})
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+
+	for _, want := range []string{"CR = %x0D", "DQ = %x22"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	assertRfc5234Shape(t, out)
+}
+
+// TestAbnfNumericValShapes covers the multi-character, padding and
+// non-ASCII cases of the num-val rendering. Driven through the public Abnf
+// surface — numericVal/charValSafe are unexported and this is an external
+// test package.
+func TestAbnfNumericValShapes(t *testing.T) {
+	crlf := "\r\n"
+	nul := "\x00"
+	acc := "\u00e9"
+	tab := "\t"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{
+			"#CRLF": &crlf,
+			"#NUL":  &nul,
+			"#ACC":  &acc,
+			"#TAB":  &tab,
+		}},
+		Rule: &tabnas.RuleOptions{Start: "top"},
+	})
+	toks := [][]tabnas.Tin{
+		{j.Token("#CRLF")}, {j.Token("#NUL")}, {j.Token("#ACC")}, {j.Token("#TAB")},
+	}
+
+	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: toks})
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+
+	for _, want := range []string{
+		"CRLF = %x0D.0A", // multi-character, dot-concatenated
+		"NUL  = %x00",    // zero-padded to two hex digits
+		"ACC  = %xE9",    // non-ASCII
+		"TAB  = %x09",    // control character
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	assertRfc5234Shape(t, out)
+}
+
+// TestAbnfEmptyOpenWithContinuation pins that a rule whose only open
+// alternative is empty, but which HAS a close continuation, emits the
+// continuation alone. `option = "[" *c-wsp alternation *c-wsp "]"` and
+// `alternation` needs at least one concatenation, so `[ ]` is not a legal
+// option — this used to emit `inner = [  ] AA`. Parity with the TS
+// "emits the continuation alone, not an empty option" case.
+func TestAbnfEmptyOpenWithContinuation(t *testing.T) {
+	a := "a"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#XA": &a}},
+		Rule:  &tabnas.RuleOptions{Start: "top"},
+	})
+	at := j.Token("#XA")
+	zz := j.Token("#ZZ")
+
+	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{P: "inner"})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+	j.Rule("inner", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{}) // empty open alternative
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{at}}})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+	if emptyOption.MatchString(out) {
+		t.Errorf("empty `[ ]` option in:\n%s", out)
+	}
+	assertRfc5234Shape(t, out)
+}
+
+// TestAbnfRulenameCollisionIsCaseInsensitive pins RFC 5234 §2.1: rule names
+// are case-insensitive, so `Foo-Bar` and `foo-bar` are ONE rule. Sanitising
+// `foo_bar` beside a reserved `Foo-Bar` used to emit two definitions of the
+// same rule. Parity with the TS case.
+func TestAbnfRulenameCollisionIsCaseInsensitive(t *testing.T) {
+	a, b := "a", "b"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#XA": &a, "#XB": &b}},
+		Rule:  &tabnas.RuleOptions{Start: "top"},
+	})
+	at := j.Token("#XA")
+	bt := j.Token("#XB")
+	zz := j.Token("#ZZ")
+
+	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{at}}, P: "Foo-Bar"})
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{bt}}, P: "foo_bar"})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{zz}}})
+	})
+	j.Rule("Foo-Bar", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{at}}})
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+	j.Rule("foo_bar", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{bt}}})
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		head := abnfHeadName.FindStringSubmatch(line)
+		if head == nil {
+			continue
+		}
+		key := strings.ToLower(head[1])
+		if seen[key] {
+			t.Errorf("two productions define the same rule (case-insensitively): %q in:\n%s", head[1], out)
+		}
+		seen[key] = true
+	}
+	assertRfc5234Shape(t, out)
+}
+
+var emptyOption = regexp.MustCompile(`\[\s*\]`)

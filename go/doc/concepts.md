@@ -67,6 +67,20 @@ the pushed rule consumes, so they are skipped here to avoid
 double-counting the input. Constructs ABNF cannot express are emitted as
 ABNF comments (`; /.../`) so the output stays valid text.
 
+Two more exist to keep the output valid *outside* this project, matching
+the TypeScript emitter. An *empty open* alternate — what makes a kept
+`*(…)` rule zero-or-more — renders by wrapping the other alternates in
+`[ … ]` rather than as a trailing `/`, because RFC 5234's `alternation`
+requires a concatenation after every `/`. And rule names are mapped to
+`rulename = ALPHA *(ALPHA / DIGIT / "-")`, so a synthetic `_gen1_star_T`
+is emitted as `r-gen1-star-T`, using the same name for the production and
+every reference to it.
+
+The target dialect is RFC 5234 as updated by
+[RFC 7405](https://www.rfc-editor.org/rfc/rfc7405): everything emitted is
+RFC 5234 except the `%s"…"` case-sensitive literal, which is 7405's
+addition and what current ABNF tooling implements.
+
 The Go emitter reads only the running engine. Go has no ABNF library port,
 so there is nothing to depend on; the independence the TypeScript port
 enforces (never importing `@tabnas/abnf`) is automatic here.

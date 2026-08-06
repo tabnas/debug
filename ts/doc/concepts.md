@@ -111,6 +111,30 @@ Several encodings exist precisely to make that round-trip hold:
   sequence is a predictive *peek* — matched to choose the alternate but
   consumed by the pushed rule. Emitting those tokens as terminals would
   double-count the input, so the emitter skips them.
+- An *empty open* alternate is what makes a kept `*(…)` rule
+  zero-or-more. It renders by wrapping the other alternates in `[ … ]`.
+  Not as a trailing `/`: RFC 5234 is
+  `alternation = concatenation *(*c-wsp "/" *c-wsp concatenation)`, so
+  every `/` needs a concatenation after it, and `x = A x /` is a syntax
+  error. `@tabnas/abnf` accepts it; other ABNF tools do not.
+- Rule names are mapped to `rulename = ALPHA *(ALPHA / DIGIT / "-")`.
+  Engine names are not so constrained — the ABNF compiler synthesises
+  `_gen1_star_term` and `…$alt0`, and a regex token arrives as
+  `RX___U0030__U0039` — so each is sanitised once (`_gen1_star_term` →
+  `r-gen1-star-term`) and the same result is used for the production and
+  every reference to it. Names that are already legal keep their
+  spelling; a collision after sanitising takes a numeric suffix.
+
+Both of those are about the output being usable *outside* this project.
+Re-compiling with `@tabnas/abnf` is not evidence of validity — it is
+lenient about exactly these two things.
+
+**The target dialect is RFC 5234 as updated by
+[RFC 7405](https://www.rfc-editor.org/rfc/rfc7405).** Everything emitted is
+RFC 5234 except the `%s"…"` case-sensitive literal, which is 7405's
+addition. That is what current ABNF tooling implements, and the pure-5234
+alternatives are worse: `%x48.69` is unreadable, and a bare char-val would
+silently lose the case-sensitivity.
 
 Constructs ABNF cannot express — an arbitrary match regex — are emitted as
 ABNF comments (`; /.../`) rather than dropped. The output stays valid
