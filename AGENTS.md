@@ -208,9 +208,12 @@ change that is on `main` but not yet released, or a fixture that only
 holds against one of them. Run `gofmt -l .` and `go vet ./...` before
 committing Go changes.
 
-The Go module carries a top-level `const Version` in `go/debug.go`;
+The Go module carries a top-level `const VERSION` in `go/debug.go`;
 `make publish-go V=x.y.z` seds that const, commits, and tags
-`go/vX.Y.Z`.
+`go/vX.Y.Z`. The TypeScript package exports a matching `VERSION` from
+`ts/src/debug.ts`. Both MUST equal `ts/package.json` "version":
+`go/version_test.go` and `ts/test/version.test.js` fail the build if
+either drifts.
 
 ## CI
 

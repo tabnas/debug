@@ -22,7 +22,7 @@ import tabnasdebug "github.com/tabnas/debug/go"
 | `Abnf(j *tabnas.Tabnas) (string, error)` | func | The live grammar rendered as ABNF text. |
 | `Use(j *tabnas.Tabnas, plugin tabnas.Plugin, opts ...map[string]any) error` | func | `(*Tabnas).Use` plus the `print` behaviour: logs `USE:` and a `Describe` dump. |
 | `Defaults` | `map[string]any` | The default options (`{"print": true, "trace": true}`). |
-| `Version` | `string` | The module version. |
+| `VERSION` | `string` | The module version. Always equal to `ts/package.json` "version"; `version_test.go` fails the build if they drift. |
 | `DebugModel`, `DebugTokenInfo`, `DebugTokenSet`, `DebugAltInfo`, `DebugRuleInfo`, `DebugRuleEdges`, `DebugLexMatcher`, `DebugConfigInfo`, `DebugPluginInfo` | structs | The typed shape of `Model`'s result, mirroring the TS exported types. |
 
 ## `Debug` — the plugin
