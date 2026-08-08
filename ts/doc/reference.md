@@ -14,6 +14,7 @@ const { Debug } = require('@tabnas/debug')
 |---|---|---|
 | `Debug` | `Plugin` | The plugin function. Load it with `tn.use(Debug, options)`. |
 | `Debug.defaults` | `DebugOptions` | The default options (see below). |
+| `VERSION` | `string` | The package version. Always equal to `package.json` "version"; `test/version.test.js` fails the build if they drift. |
 
 The module also exports the TypeScript types that describe `model()`'s
 return value: `DebugModel`, `DebugTokenInfo`, `DebugTokenSet`,
