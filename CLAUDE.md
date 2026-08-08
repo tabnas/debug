@@ -4,10 +4,12 @@ Quick reminders:
 
 - `ts/` (TypeScript) is canonical; `go/` tracks it. Change TypeScript
   first, then update Go to match as far as the Go engine API allows.
-- The `tabnas` parser engine (`github.com/tabnas/parser`) is not
-  published; run `scripts/fetch-parser.sh` to download + build its
-  GitHub `main` branch into `vendor/` before building or testing.
-- `make build` / `make test` fetch the engine and cover both
-  implementations.
+- The engine is already wired: TS via the `node_modules/@tabnas/parser`
+  symlink to the sibling `../parser/ts`, Go via a pinned published
+  module version in `go/go.mod`. `scripts/fetch-parser.sh` and `vendor/`
+  are legacy and are NOT prerequisites — nothing in the build reads them.
+- `make build` / `make test` cover both implementations. Don't run
+  `npm ci` or delete `node_modules`: it breaks the symlink wiring.
 - Some TS/Go differences are intentional (engine API limits) and are
-  recorded in `docs/reference.md`.
+  recorded in `docs/reference.md` — the authoritative divergence
+  register.

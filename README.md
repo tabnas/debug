@@ -54,14 +54,14 @@ Per-language quick starts: [`ts/README.md`](ts/README.md),
 ## Build and test
 
 Both implementations consume the
-[`tabnas`](https://github.com/tabnas/parser) parser engine, which is not
-published to a registry: it is fetched from its GitHub `main` branch and
-built into `vendor/` (git-ignored) by `scripts/fetch-parser.sh`. The
-Makefile runs this for you:
+[`tabnas`](https://github.com/tabnas/parser) parser engine. The Go module
+resolves it at a pinned published version; the TypeScript package
+resolves it from a sibling `../parser` checkout, so clone and build that
+first (`cd parser/ts && npm install && npm run build`).
 
 ```bash
-make build   # fetch engine, build both implementations
-make test    # fetch engine, build + test both
+make build   # build both implementations
+make test    # build + test both
 ```
 
 Contributors and AI agents: see [`AGENTS.md`](AGENTS.md).

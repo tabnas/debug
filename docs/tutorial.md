@@ -11,12 +11,12 @@ engine alongside the debug plugin. Pick the track for your language.
 
 ### TypeScript / JavaScript
 
-The engine and plugin are consumed from source in this repository. From a
-checkout, fetch the engine and install:
+The plugin resolves the engine from a sibling `../parser` checkout. Build
+that first, then build this package:
 
 ```bash
-./scripts/fetch-parser.sh
-cd ts && npm install
+(cd ../parser/ts && npm install && npm run build)
+cd ts && npm install && npm run build
 ```
 
 Create `demo.js`:

@@ -10,12 +10,11 @@ The TypeScript version is authoritative; the Go API differs in shape (see
 as `tabnasdebug`.
 
 You need the [`tabnas`](https://github.com/tabnas/parser) parser engine
-and the `github.com/tabnas/debug/go` package. In this repository the
-engine is consumed from source; fetch it first:
+and the `github.com/tabnas/debug/go` package. The engine is a normal
+module requirement, pinned in `go/go.mod`, so nothing needs fetching:
 
 ```bash
-./scripts/fetch-parser.sh
-cd go && go test ./...
+cd go && GOWORK=off go test ./...
 ```
 
 ## 1. Load the plugin

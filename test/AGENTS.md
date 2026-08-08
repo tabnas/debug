@@ -17,13 +17,40 @@ Blank lines are skipped, and so are comment lines — a line starting with
 | Column | Meaning |
 |---|---|
 | `grammar` | The NAME of a grammar in the shared fixture registry (see below). Debug reports on a live engine, so a fixture names a grammar rather than carrying source text. |
-| `abnf` *or* `sections` | See below. |
+| `abnf`, `sections` *or* `model` | See below. |
 
 The **second column's header name selects what the runner reports**:
 
 - `abnf` — `tn.debug.abnf()` / `Abnf(j)`, the emitted ABNF, as a JSON string.
 - `sections` — the `describe()` section banners, in order, as a JSON array
   of strings.
+- `model` — the *grammar-structure* portion of `tn.debug.model()` /
+  `Model(j)` as a JSON object: `{"rules": …, "graph": …}`. This pins the
+  cross-runtime serialisation claim in `../docs/reference.md` — that the Go
+  `DebugModel`'s JSON tags match the TS field names, so the two runtimes'
+  models are comparable once decoded.
+
+  Two deliberate normalisations make `model` shareable. Both runners sort
+  `rules` and `graph` by name, because the orderings differ by design (TS
+  insertion order, Go by name). And the *instance-level* sections —
+  `lexer`, `plugins`, `tag` — are excluded: the Go engine exposes only
+  custom lexer matchers, and the Go registry's grammars do not load the
+  debug plugin (in Go `Describe`/`Model` are package functions, so they
+  need not). Comparison is on decoded JSON, so field order is irrelevant.
+
+  `tag` is a different case, and a temporary one. Both engines now default
+  an unset tag to `-` (the engine exports `tabnas.DefaultTag`), so the two
+  runtimes agree — but only against the sibling engine checkout. Under
+  `GOWORK=off`, as `make test` runs it, the Go suite resolves
+  `github.com/tabnas/parser/go` from `go/go.mod` (v0.6.1, pre-alignment)
+  and that engine still leaves the tag empty. CI resolves the other way
+  (workspace on, sibling `main`) and gets `-`. A shared fixture has to
+  pass under both, so `tag` stays out. Add it once `go/go.mod` moves past
+  the alignment; see `../docs/reference.md` §"Engine-version note: the
+  unset instance `tag`".
+
+  A row's expected value is written by the CANONICAL TypeScript side; see
+  the note in `../AGENTS.md` on regenerating it.
 
 ## The grammar registry
 

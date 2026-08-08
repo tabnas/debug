@@ -22,11 +22,33 @@ const specDir = Path.join(__dirname, '..', '..', 'test', 'spec')
 // A describe() section banner, e.g. "========= TOKENS ========".
 const SECTION_HEADER = /^=+ .* =+$/
 
+// Rules and graph entries carry a `name`; the two runtimes order them
+// differently by design (TS insertion order, Go sorted by name — see
+// ../../docs/reference.md), so a shared fixture compares them sorted.
+const byName = (list) =>
+  [...list].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+
 // What the second column holds, keyed by its header name.
 const REPORTERS = {
   abnf: (tn) => tn.debug.abnf(),
   sections: (tn) =>
     tn.debug.describe().split('\n').filter((l) => SECTION_HEADER.test(l)),
+  // The grammar-structure portion of model(), as it serialises. Pins the
+  // cross-runtime claim that the Go DebugModel's JSON tags match the TS
+  // field names. Instance-level sections are excluded: `lexer` is
+  // summarised in Go and the Go fixtures need not load the debug plugin,
+  // so those two legitimately differ. `tag` no longer differs by design
+  // — the engine now defaults an unset tag to '-' in BOTH runtimes — but
+  // it stays out until go/go.mod moves past that engine alignment, since
+  // the Go suite runs GOWORK=off against the pinned pre-alignment
+  // engine. See ../../docs/reference.md, "Engine-version note".
+  model: (tn) => {
+    const m = tn.debug.model()
+    // Round-trip through JSON so absent optionals drop out on both sides.
+    return JSON.parse(
+      JSON.stringify({ rules: byName(m.rules), graph: byName(m.graph) }),
+    )
+  },
 }
 
 // The header row's second name selects the reporter run over the grammar.

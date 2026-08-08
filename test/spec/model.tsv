@@ -1,0 +1,9 @@
+grammar	model
+# model: the grammar-structure portion of model()/Model() -- the rule set
+# and the rule-reference graph -- as JSON, with rules and graph sorted by
+# name so the two runtimes' orderings (TS insertion order, Go by name) are
+# comparable. Pins the cross-runtime serialisation claim in
+# docs/reference.md: the Go structs' JSON tags match the TS field names.
+bare	{"rules":[],"graph":[]}
+add	{"rules":[{"name":"add","open":[{"seq":["#NR"],"groups":[],"action":false,"cond":false,"modifier":false}],"close":[{"seq":["#PL"],"groups":[],"action":false,"cond":false,"modifier":false,"replace":"add"},{"seq":[],"groups":[],"action":false,"cond":false,"modifier":false},{"seq":["#ZZ"],"groups":[],"action":false,"cond":false,"modifier":false}]},{"name":"val","open":[{"seq":[],"groups":[],"action":false,"cond":false,"modifier":false,"push":"add"}],"close":[]}],"graph":[{"name":"add","openPush":[],"openReplace":[],"closePush":[],"closeReplace":["add"]},{"name":"val","openPush":["add"],"openReplace":[],"closePush":[],"closeReplace":[]}]}
+greet	{"rules":[{"name":"greet","open":[{"seq":["#HI"],"groups":[],"action":false,"cond":false,"modifier":false},{"seq":["#HE"],"groups":[],"action":false,"cond":false,"modifier":false}],"close":[{"seq":["#ZZ"],"groups":[],"action":false,"cond":false,"modifier":false}]}],"graph":[{"name":"greet","openPush":[],"openReplace":[],"closePush":[],"closeReplace":[]}]}

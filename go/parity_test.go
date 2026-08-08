@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -38,8 +39,8 @@ func specDir() string { return filepath.Join("..", "test", "spec") }
 var sectionHeader = regexp.MustCompile(`^=+ .* =+$`)
 
 // loadSpec reads one fixture. The header row's SECOND column names what the
-// runner reports about the grammar in the first column ("abnf" or
-// "sections").
+// runner reports about the grammar in the first column ("abnf", "sections"
+// or "model").
 func loadSpec(t *testing.T, path string) (string, []specRow) {
 	t.Helper()
 	f, err := os.Open(path)
@@ -132,6 +133,54 @@ func runSpecFile(t *testing.T, path string) {
 				}
 				if !reflect.DeepEqual(got, want) {
 					t.Errorf("%s:%d:\n  got  %v\n  want %v", row.file, row.lineNo, got, want)
+				}
+
+			case "model":
+				// The grammar-structure portion of Model, as it serialises.
+				// Pins the cross-runtime claim that the Go DebugModel's JSON
+				// tags match the TS field names. Instance-level sections are
+				// excluded: Lexer is summarised in Go and the Go fixtures
+				// need not load the debug plugin, so those two legitimately
+				// differ. Tag no longer differs by design — the engine now
+				// defaults an unset tag to "-" in BOTH runtimes — but it
+				// stays out until go.mod moves past that engine alignment,
+				// since this suite runs GOWORK=off against the pinned
+				// pre-alignment engine. See ../docs/reference.md,
+				// "Engine-version note".
+				m, err := tabnasdebug.Model(j)
+				if err != nil {
+					t.Fatalf("%s:%d: Model: %v", row.file, row.lineNo, err)
+				}
+				// The runtimes order rules/graph differently by design (TS
+				// insertion order, Go by name — see ../docs/reference.md), so
+				// the shared fixture compares them sorted by name.
+				// make+copy, NOT append to a nil slice: appending nothing to
+				// nil yields nil, which would marshal as `null` and lose the
+				// empty-list distinction Model deliberately preserves.
+				rules := make([]tabnasdebug.DebugRuleInfo, len(m.Rules))
+				copy(rules, m.Rules)
+				sort.Slice(rules, func(a, b int) bool { return rules[a].Name < rules[b].Name })
+				graph := make([]tabnasdebug.DebugRuleEdges, len(m.Graph))
+				copy(graph, m.Graph)
+				sort.Slice(graph, func(a, b int) bool { return graph[a].Name < graph[b].Name })
+
+				// Compare as decoded JSON so both sides are the same shape of
+				// generic value and field ORDER is irrelevant.
+				raw, err := json.Marshal(map[string]any{"rules": rules, "graph": graph})
+				if err != nil {
+					t.Fatalf("%s:%d: marshal model: %v", row.file, row.lineNo, err)
+				}
+				var got, want any
+				if err := json.Unmarshal(raw, &got); err != nil {
+					t.Fatalf("%s:%d: decode model: %v", row.file, row.lineNo, err)
+				}
+				if err := json.Unmarshal([]byte(row.expected), &want); err != nil {
+					t.Fatalf("%s:%d: bad expected JSON %q: %v", row.file, row.lineNo, row.expected, err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					gotJSON, _ := json.Marshal(got)
+					t.Errorf("%s:%d:\n  got  %s\n  want %s",
+						row.file, row.lineNo, gotJSON, row.expected)
 				}
 
 			default:

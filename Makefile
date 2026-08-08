@@ -1,9 +1,18 @@
 # Build, test and publish both the TypeScript (ts/) and Go (go/)
 # implementations. ts/ is canonical; go/ tracks it.
 #
-# Local build/test resolve the unpublished @tabnas siblings via the
-# repo-set go.work + node_modules symlinks (admin/scripts/link.sh).
-# This module is vendored (excluded from go.work), so Go uses GOWORK=off.
+# TypeScript resolves the engine via the node_modules symlink to the
+# sibling ../parser/ts (wired by admin/scripts/link.sh).
+#
+# Go uses GOWORK=off deliberately: go/go.mod carries no `replace`, so this
+# pins the engine to the PUBLISHED version in go.mod. Without it, the
+# repo-set ../go.work (which lists ./debug/go) resolves the sibling
+# ../parser/go instead.
+#
+# Note that CI resolves the other way: polyglot-ci.yml clones the siblings
+# and generates a go.work over every module without a ../vendor/ replace
+# (this one included), then runs a plain `go test` -- so CI builds against
+# parser MAIN. Both resolutions must pass; run each before pushing.
 
 .PHONY: all build test clean build-ts build-go test-ts test-go \
         clean-ts clean-go publish-ts publish-go tags-go reset
