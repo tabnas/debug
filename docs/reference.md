@@ -91,7 +91,7 @@ exact headers:
 
 | Header | Contents |
 |---|---|
-| `========= INSTANCE ========` | The instance tag (`tag:`), empty when unset. |
+| `========= INSTANCE ========` | The instance tag (`tag:`). Both plugins print the engine's tag verbatim, and both engines now default an unset tag to `-`, so an untagged instance renders `tag: -` in either runtime. (See the engine-version note below: a Go engine older than the `tabnas.DefaultTag` alignment left an unset tag empty and rendered a bare `tag:`.) |
 | `========= TOKENS ========` | Each token: name, tin, and fixed source text (if any). Followed by a token-set sub-block (`IGNORE`, `VAL`, `KEY`, plus any custom set) listing member token names. |
 | `========= RULES =========` | Each rule's push/replace transition tree: the distinct rule-name targets reached by an open-push (`op`), open-replace (`or`), close-push (`cp`) and close-replace (`cr`) alternate. Empty categories are omitted; single-character rule names are valid targets. Function-valued (`PF`/`RF`) targets render as `<F>`. |
 | `========= ALTS =========` | Each rule's open and close alternates: token sequence, push (`p`), replace (`r`), backtrack (`b`), counters (`n`), group (`g`), the action/condition/modifier presence flags (`A`/`C`/`H`), and the declarative condition (`CD`). Function-valued push/replace render as `p=<F>` / `r=<F>`. Per-position multi-token sets render as `[a,b]`, a single token bare. |
@@ -125,6 +125,44 @@ function-valued push/replace target is `"<fn>"`. The Go `Back` field
 omits an explicit `b: 0` (Go zero-value semantics), and Go rule/token
 ordering is deterministic (rules by name, tokens by tin) rather than TS
 insertion order.
+
+The Go model's slice fields are always initialised, never left nil, so an
+empty section serialises as `[]` — matching TS — rather than `null`.
+
+`test/spec/model.tsv` pins this cross-runtime comparability: it runs the
+`rules` and `graph` sections of both models through JSON for every
+grammar in the shared registry, sorted by name to absorb the documented
+ordering difference. The *instance-level* sections (`lexer`, `plugins`,
+`tag`) are outside that fixture: `lexer` is summarised in Go, the Go
+fixtures need not load the debug plugin (in Go, `Describe`/`Model`/`Abnf`
+are package functions), and `tag` depends on the engine version — see
+below.
+
+### Engine-version note: the unset instance `tag`
+
+The TypeScript engine has always defaulted an unset `tag` to `-`
+(`ts/src/defaults.ts`). The Go engine used to leave `Options().Tag`
+empty, so an untagged instance rendered `tag: -` in TS and a bare
+`tag:` in Go, and `Model(j).Tag` was `""` where TS gave `"-"`.
+
+That is **fixed in the engine**: `github.com/tabnas/parser/go` now
+exports `DefaultTag = "-"` and `Make` applies it to an unset
+`Options.Tag`, so both runtimes report `-`. Verified against the sibling
+engine checkout (`cd go && go test ./...` with the repo `go.work`
+active).
+
+The fix is not yet in a published engine release, so the Go suite's two
+resolutions **disagree** on this one value:
+
+| Resolution | Engine | Unset tag |
+|---|---|---|
+| `GOWORK=off` (`make test`, `make test-go`) | published `parser/go v0.6.1` | `""` |
+| workspace on (plain `go test`; what CI generates) | sibling `parser/go` `main` | `"-"` |
+
+A shared fixture has to pass under both, so `tag` is left out of
+`model.tsv` until `go/go.mod` moves past the alignment. Once the engine
+bump lands, both resolutions report `-`, `tag` can join `rules`/`graph`
+in the fixture, and this note can go.
 
 ## Trace output
 

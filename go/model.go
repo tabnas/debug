@@ -111,7 +111,7 @@ type DebugPluginInfo struct {
 // text. The grammar-structure fields are JSON-serialisable and
 // round-trip through encoding/json. Mirrors the TS DebugModel.
 type DebugModel struct {
-	Tag       string            `json:"tag"`       // Instance tag ("" when unset).
+	Tag       string            `json:"tag"`       // Instance tag; tabnas.DefaultTag ("-") when unset.
 	Tokens    []DebugTokenInfo  `json:"tokens"`    // The token table.
 	TokenSets []DebugTokenSet   `json:"tokenSets"` // Named token sets.
 	Rules     []DebugRuleInfo   `json:"rules"`     // Rules and their alternates.

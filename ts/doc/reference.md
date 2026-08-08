@@ -74,7 +74,7 @@ these exact headers:
 
 | Header | Contents |
 |---|---|
-| `========= INSTANCE ========` | The instance tag (`tag:`), empty when unset. |
+| `========= INSTANCE ========` | The instance tag (`tag:`). Printed verbatim; the engine defaults an unset tag to `-`, so an untagged instance renders `tag: -`. |
 | `========= TOKENS ========` | Each token: name, tin, fixed source text (if any). Then a token-set sub-block listing each set's member token names. |
 | `========= RULES =========` | Each rule's push/replace transition tree: distinct rule-name targets reached by open-push (`op`), open-replace (`or`), close-push (`cp`), close-replace (`cr`). Empty categories omitted; function-valued targets render as `<F>`. |
 | `========= ALTS =========` | Each rule's open/close alternates: token sequence, push (`p`), replace (`r`), backtrack (`b`), counters (`n`), the action/condition/modifier flags (`A`/`C`/`H`), declarative condition (`CN`/`CD`), group (`g`). A null entry in a sequence renders as `***INVALID***`. |
@@ -104,7 +104,7 @@ type DebugModel = {
 
 | Field | Shape | Notes |
 |---|---|---|
-| `tag` | `string` | The instance tag (`''` when unset). |
+| `tag` | `string` | The instance tag; the engine default `'-'` when unset. |
 | `tokens` | `{ tin: number; name: string; fixed?: string }[]` | The token table; `fixed` present only for fixed (literal) tokens. |
 | `tokenSets` | `{ name: string; tins: number[] }[]` | Named token sets and their member tins. |
 | `rules` | `DebugRuleInfo[]` | Each rule's name and its `open` / `close` alternates. |

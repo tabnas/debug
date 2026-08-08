@@ -85,7 +85,7 @@ sections, in this order, with these exact headers:
 
 | Header | Contents |
 |---|---|
-| `========= INSTANCE ========` | The instance tag (`tag:`), empty when unset. |
+| `========= INSTANCE ========` | The instance tag (`tag:`). Printed verbatim; the engine defaults an unset tag to `tabnas.DefaultTag` (`-`), matching TS. Engines older than that alignment leave it empty and render a bare `tag:` — see [`../../docs/reference.md`](../../docs/reference.md). |
 | `========= TOKENS ========` | Each token: name, tin, fixed source text (if any). Then a token-set sub-block (`IGNORE`, `VAL`, `KEY`) listing member token names. |
 | `========= RULES =========` | Each rule's push/replace transition tree: distinct rule-name targets reached by open-push (`op`), open-replace (`or`), close-push (`cp`), close-replace (`cr`). Empty categories omitted; function-valued targets render as `<F>`. |
 | `========= ALTS =========` | Each rule's open/close alternates: token sequence, push (`p`), replace (`r`), backtrack (`b`), counters (`n`), group (`g`), the action/condition/modifier flags (`A`/`C`/`H`), declarative condition (`CD`). A nil alternate renders as `***INVALID***`. |
@@ -127,7 +127,7 @@ type DebugModel struct {
 
 | Field | Shape | Notes |
 |---|---|---|
-| `Tag` | `string` | The instance tag (`""` when unset). |
+| `Tag` | `string` | The instance tag; the engine's `tabnas.DefaultTag` (`-`) when unset, matching TS. Empty only on engines older than that alignment. |
 | `Tokens` | `[]DebugTokenInfo` (`Tin int`, `Name string`, `Fixed string,omitempty`) | The token table; `Fixed` present only for fixed (literal) tokens. |
 | `TokenSets` | `[]DebugTokenSet` (`Name string`, `Tins []int`) | Named token sets (`IGNORE`, `VAL`, `KEY`) and their member tins. |
 | `Rules` | `[]DebugRuleInfo` | Each rule's name and its `Open` / `Close` alternates as `DebugAltInfo`. |

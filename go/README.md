@@ -65,17 +65,18 @@ func main() {
 
 ## Build and test
 
-This repository consumes the engine from source. From the repository
-root, fetch it first, then build and test:
+The engine is an ordinary module requirement pinned in `go.mod` — there
+is no `replace` and nothing to fetch:
 
 ```bash
-./scripts/fetch-parser.sh   # downloads + builds the engine into vendor/
-cd go && go build ./... && go vet ./... && go test ./...
+cd go && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...
 ```
 
-Or, from the repository root, `make test-go` does all of the above. The
-`go.mod` `replace` directive points the `github.com/tabnas/parser/go`
-requirement at the fetched copy in `../vendor`.
+Or, from the repository root, `make test-go`. `GOWORK=off` pins the
+engine to that published version; omitting it resolves the sibling
+`../../parser/go` via the repo-set `go.work`. CI does the latter — it
+generates a workspace over the cloned siblings and tests against parser
+`main` — so both resolutions need to pass.
 
 ## License
 

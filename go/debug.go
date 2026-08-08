@@ -251,8 +251,11 @@ func Abnf(j *tabnas.Tabnas) (out string, err error) {
 	return emitAbnf(j), nil
 }
 
-// describeInstance reports the instance tag (empty when unset), mirroring
-// the canonical TypeScript describe()'s INSTANCE section.
+// describeInstance reports the instance tag, mirroring the canonical
+// TypeScript describe()'s INSTANCE section. The tag is printed verbatim:
+// the engine defaults an unset Options.Tag to tabnas.DefaultTag ("-"),
+// the same default the TS engine applies, so an untagged instance reads
+// "tag: -" in both runtimes.
 func describeInstance(j *tabnas.Tabnas) string {
 	return "  tag: " + j.Options().Tag
 }

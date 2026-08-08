@@ -6,13 +6,12 @@ description of its grammar, render it as ABNF, and trace a parse. One
 happy path, step by step.
 
 You need the [`tabnas`](https://github.com/tabnas/parser) parser engine
-and the `@tabnas/debug` plugin. In this repository they are consumed from
-source; from a checkout, fetch the engine and install the TypeScript
-package:
+and the `@tabnas/debug` plugin. The engine is resolved from a sibling
+`../parser` checkout, so build that first, then build this package:
 
 ```bash
-./scripts/fetch-parser.sh
-cd ts && npm install
+(cd ../parser/ts && npm install && npm run build)
+cd ts && npm install && npm run build
 ```
 
 ## 1. Load the plugin
