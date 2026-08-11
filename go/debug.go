@@ -37,7 +37,7 @@ import (
 // VERSION is this module's version. It MUST equal ts/package.json
 // "version": the release orchestrator rewrites both, and
 // TestVersionMatchesPackageJSON fails the build if they drift.
-const VERSION = "0.3.1"
+const VERSION = "0.3.2"
 
 // Defaults are the option values used when the plugin is loaded without
 // an explicit configuration. They mirror the canonical TypeScript
