@@ -65,11 +65,21 @@ live engine), so no fixture may be compiled from ABNF source.
 
 ## Who runs what
 
-- TypeScript: `ts/test/parity.test.js` — reads `../../test/spec`.
-- Go: `go/parity_test.go` — `TestSpec` globs `../test/spec/*.tsv`.
+- TypeScript: `ts/test/parity.test.js` — a `makeRunner(...)` per fixture.
+- Go: `go/parity_test.go` — a `support.Runner{...}` per fixture.
+
+One runner per FILE, not one over the directory, because the second
+column's header names the reporter. Both hold only what is specific to
+debug: that reporter table, and the normalisations that make its output
+comparable across runtimes. Everything else — finding `test/spec`,
+reading the file, the comparison, the `<file>:<line>` in a failure
+message — comes from
+[`@tabnas/support`](https://github.com/tabnas/support) and its Go half,
+so the two loaders cannot drift from each other either.
 
 Both discover files by directory listing: adding a `.tsv` here runs it in
-both runtimes without touching either runner.
+both runtimes without touching either runner. An empty fixture, and a spec
+directory with no fixtures in it, both **fail**.
 
 ## Rules
 

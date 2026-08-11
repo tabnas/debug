@@ -47,6 +47,7 @@
     "@tabnas/abnf": "*",
     "@tabnas/parser": "*",
     "@tabnas/railroad": "*",
+    "@tabnas/support": "*",
     "@types/node": "25.6.0",
     "typescript": "6.0.3"
   },
