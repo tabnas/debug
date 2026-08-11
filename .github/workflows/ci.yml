@@ -13,5 +13,5 @@ jobs:
   ci:
     uses: tabnas/.github/.github/workflows/polyglot-ci.yml@main
     with:
-      deps: "parser"
-      build-order: "parser debug"
+      deps: "parser bnf abnf"
+      build-order: "parser bnf debug abnf"
