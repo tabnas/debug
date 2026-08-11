@@ -856,32 +856,44 @@ func emitAbnf(j *tabnas.Tabnas) string {
 	var inlineRef func(name string, seen map[string]bool) string
 
 	// Render one alt as an ABNF element sequence: its .S token positions then
-	// its .P/.R target (a synthetic target is inlined). A B+push/replace alt
-	// peeks its .S tokens (the pushed rule consumes them) — skip them.
+	// its .P/.R target (a synthetic target is inlined).
+	//
+	// An alt consumes len(.S) - .B positions — the engine records "matched
+	// minus backtrack". Positions beyond that are LOOKAHEAD only: matched to
+	// choose the alt, then pushed back. Rendering them as ABNF elements claims
+	// input the alt never eats.
+	//
+	// This used to test B != 0 && (P or R), which covered a peeking alt that
+	// delegates to a pushed rule but MISSED the FIRST-set-guarded epsilon:
+	// {S: "#Y", B: 1} with no target, which @tabnas/abnf emits for the skip
+	// branch of an optional, where #Y is the FOLLOW token. That rendered as a
+	// consuming alternative, so `top = [ X "@" ] Y` came back as
+	// `top = [ X T / Y ] Y` and "b" stopped parsing. Mirrors ts/src/debug.ts.
 	seqOfAlt = func(alt *tabnas.AltSpec, seen map[string]bool) string {
 		if alt == nil {
 			return ""
 		}
 		var els []string
-		peekOnly := alt.B != 0 && (alt.P != "" || alt.R != "")
-		if !peekOnly {
-			for _, pos := range alt.S {
-				// A position is a set of acceptable tins: one renders bare,
-				// several render as `( a / b )`. Drop the end token.
-				inner := make([]string, 0, len(pos))
-				for _, tin := range pos {
-					if tin == endTin {
-						continue
-					}
-					inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed, abnfName))
+		consumed := len(alt.S) - alt.B
+		if consumed < 0 {
+			consumed = 0
+		}
+		for _, pos := range alt.S[:consumed] {
+			// A position is a set of acceptable tins: one renders bare,
+			// several render as `( a / b )`. Drop the end token.
+			inner := make([]string, 0, len(pos))
+			for _, tin := range pos {
+				if tin == endTin {
+					continue
 				}
-				switch len(inner) {
-				case 0:
-				case 1:
-					els = append(els, inner[0])
-				default:
-					els = append(els, "( "+strings.Join(inner, " / ")+" )")
-				}
+				inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed, abnfName))
+			}
+			switch len(inner) {
+			case 0:
+			case 1:
+				els = append(els, inner[0])
+			default:
+				els = append(els, "( "+strings.Join(inner, " / ")+" )")
 			}
 		}
 		target := alt.P
