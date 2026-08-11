@@ -472,19 +472,31 @@ function emitAbnf(tabnas: Tabnas): string {
   const contentOpens = (rs: any): any[] => (rs.def.open || []).filter(hasContent)
 
   // Render one alt as an ABNF element sequence: its `.s` tokens then its
-  // `.p`/`.r` target (synthetic targets are inlined). A `b`+push alt peeks
-  // its `.s` tokens (the pushed rule consumes them) — skip them.
+  // `.p`/`.r` target (synthetic targets are inlined).
+  //
+  // An alt consumes `len(.s) - .b` tokens — the engine records "matched minus
+  // backtrack" (parser rules.ts, parse_alts). Tokens beyond that are LOOKAHEAD
+  // only: matched to choose the alt, then pushed back. Rendering them as ABNF
+  // elements claims input the alt never eats.
+  //
+  // This used to test `alt.b && (push || replace)`, which covered a peeking
+  // alt that delegates to a pushed rule but MISSED the FIRST-set-guarded
+  // epsilon: `{ s: '#Y', b: 1 }` with no target, which @tabnas/abnf emits for
+  // the skip branch of an optional, where #Y is the FOLLOW token. That
+  // rendered as a consuming alternative, so `top = [ X "@" ] Y` came back as
+  // `top = [ X T / Y ] Y` — the optional could swallow the follow, and `"b"`
+  // stopped parsing. Deriving from the count covers both, and any partial
+  // backtrack (b < len) besides.
   const seqOfAlt = (alt: any, seen: Set<string>): string => {
     const els: string[] = []
-    const peekOnly =
-      alt.b && ('string' === typeof alt.p || 'string' === typeof alt.r)
-    const seq: any[] = peekOnly
-      ? []
-      : Array.isArray(alt.s)
-        ? alt.s
-        : null == alt.s
-          ? []
-          : [alt.s]
+    const all: any[] = Array.isArray(alt.s)
+      ? alt.s
+      : null == alt.s
+        ? []
+        : [alt.s]
+    const back =
+      null == alt.b ? 0 : true === alt.b ? all.length : Number(alt.b) || 0
+    const seq: any[] = all.slice(0, Math.max(0, all.length - back))
     for (const item of seq) {
       if (null == item) continue
       if (Array.isArray(item)) {

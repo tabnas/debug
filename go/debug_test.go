@@ -775,3 +775,69 @@ func TestAbnfRulenameCollisionIsCaseInsensitive(t *testing.T) {
 }
 
 var emptyOption = regexp.MustCompile(`\[\s*\]`)
+
+// TestAbnfFollowGuardedEpsilonIsNotAnAlternative pins the fix for a real
+// regression: @tabnas/abnf emits the skip branch of an optional as a
+// FIRST-set-guarded epsilon — an alt carrying the FOLLOW token in .S with
+// .B set and NO push/replace target, e.g. {S: [[#Y]], B: 1}. The token is
+// lookahead: matched to choose the branch, then backtracked, so the alt
+// consumes nothing (len(.S) - .B == 0).
+//
+// The emitter used to skip .S only when .B was set AND the alt pushed or
+// replaced, so this shape rendered as a CONSUMING alternative. The grammar
+// `top = [ X "@" ] Y` came back as `top = [ X T / Y ] Y`: the optional could
+// swallow the follow, leaving nothing for the trailing Y, and input "b"
+// stopped parsing. Caught by the sibling-path round-trip in
+// ../ts/test/abnf.test.js; this is the Go-side unit pin, since the round-trip
+// suite cannot run here (debug does not depend on @tabnas/abnf).
+func TestAbnfFollowGuardedEpsilonIsNotAnAlternative(t *testing.T) {
+	at, b := "@", "b"
+	j := tabnas.Make(tabnas.Options{
+		Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#T": &at, "#Y": &b}},
+		Rule:  &tabnas.RuleOptions{Start: "top"},
+	})
+	tt := j.Token("#T")
+	yy := j.Token("#Y")
+	xx := j.Token("#X")
+
+	j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{P: "_gen2_opt__gen1_group"})
+		rs.AddClose(&tabnas.AltSpec{R: "top$step1"})
+	})
+	j.Rule("top$step1", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{yy}}})
+	})
+	j.Rule("_gen1_group", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{xx}, {tt}}})
+	})
+	j.Rule("_gen2_opt__gen1_group", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Clear()
+		// take the optional: peek #X, the pushed group consumes it
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{xx}}, B: 1, P: "_gen1_group"})
+		// skip it: peek the FOLLOW #Y and consume nothing — the shape at issue
+		rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{yy}}, B: 1})
+		rs.AddOpen(&tabnas.AltSpec{}) // bare epsilon
+		rs.AddClose(&tabnas.AltSpec{})
+	})
+
+	out, err := tabnasdebug.Abnf(j)
+	if err != nil {
+		t.Fatalf("Abnf returned error: %v", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "top") {
+			continue
+		}
+		// The follow token must not appear as an alternative INSIDE the
+		// option. `top = [ X T ] Y` is right; `top = [ X T / Y ] Y` is the bug.
+		if idx := strings.Index(line, "]"); idx >= 0 {
+			if strings.Contains(line[:idx], "/") {
+				t.Errorf("follow-guarded epsilon rendered as a consuming alternative:\n%s", line)
+			}
+		}
+	}
+	assertRfc5234Shape(t, out)
+}
