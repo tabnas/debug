@@ -1,0 +1,12 @@
+{
+  "$schema": "https://tabnas.dev/schema/plugin.schema.json",
+  "name": "@tabnas/debug",
+  "go": "github.com/tabnas/debug/go",
+  "description": "Parse tracing and a structured grammar-model describe() for the tabnas engine.",
+  "engine": "@tabnas/parser",
+  "specDir": "test/spec",
+  "errorCodes": [],
+  "docs": "https://tabnas.dev/docs/packages",
+  "repository": "https://github.com/tabnas/debug",
+  "versionSource": "ts/package.json"
+}
