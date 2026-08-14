@@ -5,7 +5,7 @@
   "type": "commonjs",
   "types": "dist/debug.d.ts",
   "description": "Debug plugin for the tabnas parser — tracing helpers and a describe() method.",
-  "homepage": "https://github.com/rjrodger/tabnas-debug",
+  "homepage": "https://github.com/tabnas/debug",
   "keywords": [
     "tabnas",
     "debug",
