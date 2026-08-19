@@ -202,8 +202,13 @@ describe('abnf', () => {
 
   // Explicit structural checks on the emitted ABNF (the round-trip tests
   // above verify recognition equivalence; these pin the exact folded shape,
-  // matching the Go TestAbnfFoldsSyntheticOptional / TestAbnfKeepsRepetition
-  // tests). emit() compiles A0 via abnf and returns what debug re-emits.
+  // matching the Go TestAbnfFoldsSyntheticOptional /
+  // TestAbnfKeepsRepetitionProduction tests). emit() compiles A0 via abnf
+  // and returns what debug re-emits.
+  //
+  // The second name was written a word short. A prefix grep still found
+  // the Go test, which is why it survived; an exact one did not, and a
+  // cross-port citation is exactly the kind a reader checks exactly.
   const emit = (abnf0) => {
     const tn = new Tabnas()
     tn.use(Debug, { print: false, trace: false })
