@@ -15,6 +15,8 @@ text, `abnf()` re-expresses it as ABNF, and `trace` logs a parse step by
 step. A dev/test aid for authoring and inspecting grammars — **never a
 runtime dependency**.
 
+Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
+
 ```js
 const { Tabnas } = require('@tabnas/parser')
 const { Debug } = require('@tabnas/debug')
