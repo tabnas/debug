@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Vendored tabnas parser engine (fetched by scripts/fetch-parser.sh)
 /vendor/
+
+# --- Rust ---
+target/

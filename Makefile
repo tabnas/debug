@@ -1,8 +1,10 @@
-# Build, test and publish both the TypeScript (ts/) and Go (go/)
-# implementations. ts/ is canonical; go/ tracks it.
+# Build, test and publish the TypeScript (ts/), Go (go/) and Rust (rs/)
+# implementations. ts/ is canonical; go/ and rs/ track it.
 #
 # TypeScript resolves the engine via the node_modules symlink to the
-# sibling ../parser/ts (wired by admin/scripts/link.sh).
+# sibling ../parser/ts (wired by admin/scripts/link.sh). Rust takes the
+# engine as a path dependency on the same sibling checkout (../parser/rs),
+# so it too tests against sibling main.
 #
 # Go uses GOWORK=off deliberately: go/go.mod carries no `replace`, so this
 # pins the engine to the PUBLISHED version in go.mod. Without it, the
@@ -14,16 +16,16 @@
 # (this one included), then runs a plain `go test` -- so CI builds against
 # parser MAIN. Both resolutions must pass; run each before pushing.
 
-.PHONY: all build test clean build-ts build-go test-ts test-go \
-        clean-ts clean-go publish-ts publish-go tags-go reset
+.PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
+        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset
 
 all: build test
 
-build: build-ts build-go
+build: build-ts build-go build-rs
 
-test: test-ts test-go
+test: test-ts test-go test-rs
 
-clean: clean-ts clean-go
+clean: clean-ts clean-go clean-rs
 
 # --- TypeScript (package in ts/) ---
 build-ts:
@@ -49,6 +51,17 @@ test-go:
 clean-go:
 	cd go && GOWORK=off go clean
 
+# --- Rust (crate in rs/) ---
+build-rs:
+	cd rs && cargo build --all-targets
+
+test-rs:
+	cd rs && cargo test --all-targets
+	cd rs && cargo clippy --all-targets --all-features -- -D warnings
+
+clean-rs:
+	cd rs && cargo clean
+
 # Publish the Go module: make publish-go V=x.y.z
 # Injects V into the Go `VERSION` const, commits, tags go/vX.Y.Z, and
 # (when gh is available) creates a GitHub release.
@@ -69,3 +82,4 @@ tags-go:
 reset:
 	cd ts && npm run reset
 	cd go && GOWORK=off go clean -cache && GOWORK=off go build ./... && GOWORK=off go test -v ./...
+	cd rs && cargo clean && cargo build --all-targets && cargo test --all-targets
