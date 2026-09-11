@@ -57,6 +57,16 @@ version to fall back on and no second resolution to keep green. Clone
    tracing at all, not even the per-parse banner. `TraceKinds::any_live`
    is what encodes that.
 
+5. **Installing the trace twice must not stack it.** The engine
+   accumulates subscribers and parse-prepare hooks, so `trace::install`
+   registers its callbacks exactly ONCE per instance and keeps the live
+   selection in a `debug.trace` decoration that later installs replace —
+   including with `None`, which turns tracing off. `derive` re-runs a
+   parent's plugins on the child, so this is not hypothetical. The
+   regression tests are `reapplying_*` and
+   `deriving_a_child_does_not_stack_trace_subscribers` in
+   `tests/debug_test.rs`.
+
 ## Where the trace kinds come from
 
 TypeScript drives all six kinds through the engine's `ctx.log`. The Rust

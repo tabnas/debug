@@ -124,10 +124,16 @@ pub struct DebugRuleEdges {
 /// instead — the same limit the Go port documents. `make` is the Go
 /// analogue of the TypeScript factory name and has no Rust counterpart
 /// (function values carry no name), so it is always empty.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DebugLexMatcher {
     /// Priority (lower runs first).
-    pub order: i64,
+    ///
+    /// Kept as `f64`, the engine's own type: priorities are not
+    /// necessarily whole, and truncating would report `1.2` and `1.8` as
+    /// the same matcher order. The canonical TypeScript field is a plain
+    /// JavaScript number, so this matches it; the Go port's `int` is a Go
+    /// engine limit.
+    pub order: f64,
     /// Registered matcher name.
     pub matcher: String,
     /// Matcher function name, when recoverable.
@@ -371,7 +377,7 @@ pub(crate) fn lexer(parser: &Tabnas) -> Vec<DebugLexMatcher> {
     matchers
         .into_iter()
         .map(|matcher| DebugLexMatcher {
-            order: matcher.order as i64,
+            order: matcher.order,
             matcher: matcher.name.clone(),
             make: String::new(),
         })

@@ -146,9 +146,11 @@ pub fn apply(parser: &mut Tabnas, options: DebugOptions) -> Result<(), PluginErr
 
 fn install(parser: &mut Tabnas, options: DebugOptions) {
     parser.decorate(PRINT_DECORATION, options.print);
-    if let Some(kinds) = options.trace {
-        trace::install(parser, kinds);
-    }
+    // Always call through, including for `None`: re-applying the plugin
+    // must be able to turn a previously installed trace OFF, not just
+    // widen it. `trace::install` registers its callbacks once per
+    // instance and updates the live selection thereafter.
+    trace::install(parser, options.trace);
 }
 
 /// Install `plugin` on `parser`, dumping [`describe`] afterwards when the

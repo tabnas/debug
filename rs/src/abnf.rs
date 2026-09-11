@@ -516,7 +516,10 @@ fn token_form(parser: &Tabnas, tin: Tin, full_name: &str) -> String {
         if let tabnas::MatchTokenMatcher::Regex(regex) = &matcher.matcher {
             return regex_to_abnf(regex.as_str());
         }
-        return format!("; <match function {}>", matcher.name);
+        // A function-backed matcher has no ABNF form to recover. The
+        // canonical runtime only special-cases a RegExp and otherwise
+        // falls through to the description below, so do the same rather
+        // than inventing a form this port alone would emit.
     }
 
     // Built-in lexer token: describe it. It is lexer-provided, so a

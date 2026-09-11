@@ -114,7 +114,7 @@ is what makes `../../test/spec/model.tsv` shareable across runtimes.
 | `DebugAltInfo` | `seq`, `push`, `replace`, `back`, `counters` (all skipped when absent), `groups`, `action`, `cond`, `modifier` |
 | `DebugRuleInfo` | `name`, `open`, `close` |
 | `DebugRuleEdges` | `name`, `openPush`, `openReplace`, `closePush`, `closeReplace` |
-| `DebugLexMatcher` | `order`, `matcher`, `make` (always `""` — Rust function values carry no name) |
+| `DebugLexMatcher` | `order` (`f64` — priorities are not necessarily whole), `matcher`, `make` (always `""` — Rust function values carry no name) |
 | `DebugConfigInfo` | `start`, `finish`, `safeKey`, `lex` (the eight flags, in canonical order) |
 | `DebugPluginInfo` | `name`, `options` (skipped when absent) |
 
@@ -149,8 +149,17 @@ PL = "+"
 | fixed literal a char-val cannot hold | `%x0D.0A` |
 | match regex, single char range | `%x30-39` |
 | match regex, case-insensitive literal | `"foo"` |
-| any other match regex | `; /…/` (an ABNF comment — does not round-trip) |
+| any other match regex | `; /…/` (an ABNF comment — see the caveat below) |
+| function-backed match token | `<built-in NAME>` — no ABNF form exists, so it falls through to the description, as the canonical runtime does |
 | built-in lexer token | `<number>`, `<string>`, `<text>`, … |
+
+**Caveat, shared with the canonical runtime:** an unrecognised match regex
+emits a legend entry that is *only* a comment (`T = ; /…/`). Since `;`
+runs to end of line, that leaves a rule with no elements, which is invalid
+ABNF rather than merely non-round-tripping. This port reproduces the
+canonical behaviour deliberately — see
+[`../../docs/reference.md`](../../docs/reference.md) § "Known limitations
+inherited from the canonical runtime".
 
 An instance with no rules emits the empty string.
 
@@ -184,6 +193,15 @@ kind:
 
 Lines are indented by rule depth. Output goes to
 `parser.options.debug.output`.
+
+**Re-applying the plugin updates the selection; it does not stack.** The
+engine accumulates subscribers and parse-prepare hooks, so a second
+install would otherwise double every banner and every event, and a
+narrower selection could not switch the first set off. The callbacks are
+registered exactly once per instance and read a shared selection that
+later installs replace — including with `trace: None`, which turns
+tracing off. This matters because `Tabnas::derive` re-runs a parent's
+plugins on the child.
 
 ## `VERSION`
 

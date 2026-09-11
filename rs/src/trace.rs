@@ -23,6 +23,8 @@
 //! stays in step with the other runtimes) but nothing is ever logged for
 //! it. That is an engine-API limit, recorded in `docs/reference.md`.
 
+use std::sync::{Arc, Mutex};
+
 use tabnas::Tabnas;
 
 /// Which trace kinds are logged.
@@ -83,19 +85,55 @@ impl Default for TraceKinds {
 /// The banner written once at the start of each traced parse.
 pub const TRACE_BANNER: &str = "\n========= TRACE ==========";
 
-/// Install the selected trace subscribers on `parser`.
-pub(crate) fn install(parser: &mut Tabnas, kinds: TraceKinds) {
-    if !kinds.any_live() {
+/// The decoration key under which the plugin keeps its LIVE trace
+/// selection.
+const TRACE_DECORATION: &str = "debug.trace";
+
+/// The live selection, shared with the registered callbacks.
+type TraceState = Arc<Mutex<Option<TraceKinds>>>;
+
+/// Read the current selection. A poisoned lock traces nothing rather than
+/// panicking: debugging must not make a parse less reliable.
+fn current(state: &TraceState) -> Option<TraceKinds> {
+    state.lock().ok().and_then(|kinds| *kinds)
+}
+
+/// Install the trace subscribers on `parser`, or update the selection if
+/// they are already installed.
+///
+/// The engine ACCUMULATES subscribers and parse-prepare hooks, so
+/// registering a second set would double every banner and every event —
+/// and a later, narrower selection could not switch the first set off.
+/// Applying the plugin twice is not hypothetical: `derive` re-runs a
+/// parent's plugins on the child. So the callbacks are registered exactly
+/// once per instance and read a shared selection that later installs
+/// update in place, which is how the canonical runtime's
+/// `__debugUseWrapped` guard behaves for its own wrapper.
+pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) {
+    if let Some(state) = parser.decoration::<TraceState>(TRACE_DECORATION).cloned() {
+        if let Ok(mut live) = state.lock() {
+            *live = kinds;
+        }
         return;
     }
 
+    let state: TraceState = Arc::new(Mutex::new(kinds));
+    parser.decorate_opaque(TRACE_DECORATION, state.clone());
+
     // One banner per parse, as the canonical runtime emits it.
-    parser.parse_prepare(|context| {
-        context.options.debug.write(TRACE_BANNER);
+    let live = state.clone();
+    parser.parse_prepare(move |context| {
+        if current(&live).is_some_and(|kinds| kinds.any_live()) {
+            context.options.debug.write(TRACE_BANNER);
+        }
     });
 
-    if kinds.lex {
+    {
+        let live = state.clone();
         parser.subscribe_lex(move |token, rule, context| {
+            if !current(&live).is_some_and(|kinds| kinds.lex) {
+                return;
+            }
             context.options.debug.write(&format!(
                 "lex   {}{} {} pos={} {}:{} src={}",
                 indent(rule.d),
@@ -109,8 +147,10 @@ pub(crate) fn install(parser: &mut Tabnas, kinds: TraceKinds) {
         });
     }
 
-    if kinds.rule || kinds.stack {
+    {
+        let live = state.clone();
         parser.subscribe_rules(move |rule, context| {
+            let Some(kinds) = current(&live) else { return };
             if kinds.rule {
                 context.options.debug.write(&format!(
                     "rule  {}{}~{}/{:?} d={} node={}{}",
@@ -138,8 +178,10 @@ pub(crate) fn install(parser: &mut Tabnas, kinds: TraceKinds) {
         });
     }
 
-    if kinds.parse || kinds.node {
+    {
+        let live = state.clone();
         parser.subscribe_rule_done(move |rule, context, done| {
+            let Some(kinds) = current(&live) else { return };
             if kinds.parse {
                 let matched = match &done.alt {
                     Some(alt) => {

@@ -337,7 +337,10 @@ imposed by the Rust engine's public API and by Rust's type system:
    engine enumerates only CUSTOM lexer matchers (built-in enable flags
    appear under `CONFIG`). The `make` field is the Go analogue of the TS
    factory *name*, and Rust function values carry no name at all, so it
-   is always `""`.
+   is always `""`. Rust's `order` is an `f64`, the engine's own type:
+   matcher priorities are not necessarily whole, and the TS field is a
+   plain JavaScript number, so this matches TS more closely than Go's
+   `int` can.
 8. **`ALTS` condition rendering.** The TS `CN=` (the normalised
    condition's counter map) has no Rust counterpart, as it has no Go one.
    Rust's declarative conditions are path/op/value comparisons rather
@@ -347,3 +350,40 @@ imposed by the Rust engine's public API and by Rust's type system:
    no Rust half, so `rs/tests/common/spec.rs` implements the loader. It
    is the one loader that CAN drift from the other two; `test/AGENTS.md`
    pins the codec it has to keep.
+10. **Re-installing updates the trace selection rather than stacking it.**
+    The Rust engine accumulates subscribers and parse-prepare hooks, so
+    the plugin registers its callbacks once per instance and has later
+    installs replace a shared selection — including with `trace: None`,
+    which turns tracing off. TypeScript needs the same care for its own
+    `use()` wrapper (`__debugUseWrapped`), and for the same reason:
+    deriving a child re-runs the parent's plugins.
+
+
+## Known limitations inherited from the canonical runtime
+
+These are NOT divergences — every runtime behaves this way, because the
+Go and Rust ports faithfully reproduce `ts/src/debug.ts`. They are
+recorded here so they are not rediscovered as port bugs. Fixing one means
+changing the CANONICAL TypeScript first and pinning the corrected
+behaviour in a shared fixture, per the authority rules in `AGENTS.md`;
+changing a port alone would make the emitted ABNF diverge silently.
+
+1. **A token whose bare name matches a rule name collides in `abnf()`.**
+   The emitter seeds its name map with the rule names and strips the `#`
+   from a token before mapping it, so a grammar with a rule `NR` and a
+   token `#NR` gives both the symbol `NR`. The output then carries a
+   self-referential `NR = NR` and a second `NR = …` definition (using
+   `=`, not the incremental `=/`), which is invalid. A fix would allocate
+   token names in their own namespace and apply collision suffixing even
+   when the bare spelling is already claimed by a rule.
+
+2. **An unrecognised match regex emits a legend entry that is only a
+   comment.** The fallback is `T = ; /…/`; `;` starts an ABNF comment
+   that runs to end of line, so the rule is left with no elements — not
+   merely non-round-tripping, but unparseable. A fix would emit a prose
+   value or another valid placeholder BEFORE the explanatory comment.
+
+Both were surfaced by an automated review of the Rust port
+(tabnas/debug#37) and verified against `ts/src/debug.ts`. Neither is
+exercised by a shared fixture today; adding one is part of the TypeScript
+fix.

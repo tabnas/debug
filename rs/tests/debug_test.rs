@@ -299,6 +299,163 @@ fn step_alone_installs_no_tracing() {
     assert!(lines.lock().unwrap().is_empty());
 }
 
+// --- regressions: re-installing the plugin -------------------------------
+//
+// The engine ACCUMULATES subscribers and parse-prepare hooks, so a second
+// install must reuse the first one's registration rather than stack a
+// second set. `derive` re-runs a parent's plugins on the child, so this is
+// not a hypothetical.
+
+/// Lines written during one parse of `1+2`, after applying `options` in
+/// order.
+fn trace_of(applications: &[DebugOptions]) -> Vec<String> {
+    let mut parser = fixture::build("add").expect("a known grammar");
+    let lines = capture(&mut parser);
+    for options in applications {
+        apply(&mut parser, *options).expect("the debug plugin installs");
+    }
+    parser.parse("1+2").expect("the add grammar parses 1+2");
+    let captured = lines.lock().unwrap().clone();
+    captured
+}
+
+#[test]
+fn reapplying_the_plugin_does_not_stack_trace_subscribers() {
+    let once = trace_of(&[DebugOptions::new().with_print(false)]);
+    let twice = trace_of(&[
+        DebugOptions::new().with_print(false),
+        DebugOptions::new().with_print(false),
+    ]);
+
+    let banners = |lines: &[String]| lines.iter().filter(|line| *line == TRACE_BANNER).count();
+    assert_eq!(banners(&once), 1, "one banner per parse");
+    assert_eq!(banners(&twice), 1, "still one banner after re-applying");
+    assert_eq!(
+        once.len(),
+        twice.len(),
+        "re-applying must not duplicate trace events"
+    );
+}
+
+#[test]
+fn reapplying_with_a_narrower_selection_disables_the_older_streams() {
+    let lines = trace_of(&[
+        DebugOptions::new().with_print(false),
+        DebugOptions::new()
+            .with_print(false)
+            .with_trace(TraceKinds {
+                lex: true,
+                ..TraceKinds::none()
+            }),
+    ]);
+
+    assert!(lines.iter().any(|line| line.starts_with("lex ")));
+    for prefix in ["rule ", "stack ", "parse ", "node "] {
+        assert!(
+            !lines.iter().any(|line| line.starts_with(prefix)),
+            "a narrower re-apply must silence {prefix:?}; got {lines:#?}"
+        );
+    }
+}
+
+#[test]
+fn reapplying_without_trace_turns_tracing_off() {
+    let lines = trace_of(&[
+        DebugOptions::new().with_print(false),
+        DebugOptions::new().with_print(false).without_trace(),
+    ]);
+    assert!(
+        lines.is_empty(),
+        "re-applying without trace must silence everything; got {lines:#?}"
+    );
+}
+
+#[test]
+fn deriving_a_child_does_not_stack_trace_subscribers() {
+    // `derive` re-runs the parent's plugins against the child's options.
+    let mut parent = fixture::build("add").expect("a known grammar");
+    apply(&mut parent, DebugOptions::new().with_print(false)).expect("the debug plugin installs");
+
+    let mut child = parent.derive(|options| options.tag = "child".into()).ok();
+    let Some(child) = child.as_mut() else {
+        panic!("deriving a child must not fail");
+    };
+    let lines = capture(child);
+    child.parse("1+2").expect("the child parses 1+2");
+
+    let captured = lines.lock().unwrap().clone();
+    assert_eq!(
+        captured.iter().filter(|line| *line == TRACE_BANNER).count(),
+        1,
+        "one banner per parse on a derived instance; got {captured:#?}"
+    );
+}
+
+// --- regressions: reporting fidelity -------------------------------------
+
+#[test]
+fn lexer_matcher_order_keeps_fractional_priorities() {
+    // Truncating to an integer would report 1.2 and 1.8 as the same order.
+    let mut parser = fixture::build("bare").expect("a known grammar");
+    for (name, order) in [("early", 1.2_f64), ("late", 1.8_f64)] {
+        parser.options.lex.matchers.insert(
+            name.to_string(),
+            tabnas::LexMatcher {
+                name: name.to_string(),
+                order,
+                matcher: None,
+                imperative: None,
+                factory: None,
+            },
+        );
+    }
+
+    let orders: Vec<f64> = model(&parser)
+        .lexer
+        .into_iter()
+        .map(|matcher| matcher.order)
+        .collect();
+    assert_eq!(orders, [1.2, 1.8]);
+}
+
+#[test]
+fn a_function_backed_match_token_gets_a_valid_abnf_form() {
+    // An ABNF comment starts at `;` and runs to end of line, so a legend
+    // entry of `T = ; …` would define a rule with no elements at all. The
+    // canonical runtime only special-cases a RegExp and otherwise falls
+    // through to the built-in description; so does this port.
+    let mut parser = fixture::build("bare").expect("a known grammar");
+    let tin = parser.token("#FN");
+    parser.options.match_tokens.insert(
+        "#FN".to_string(),
+        tabnas::MatchToken {
+            name: "#FN".to_string(),
+            tin,
+            matcher: tabnas::MatchTokenMatcher::Callback(std::sync::Arc::new(|_source| None)),
+            eager: false,
+        },
+    );
+    parser.options.rule.start = "top".into();
+    parser.define_rule("top", move |spec| {
+        spec.clear();
+        spec.add_open(tabnas::AltSpec {
+            s: vec![vec![tin]],
+            ..Default::default()
+        });
+    });
+
+    let emitted = abnf(&parser);
+    let legend = emitted
+        .lines()
+        .find(|line| line.starts_with("FN "))
+        .unwrap_or_else(|| panic!("the FN legend entry is present; got:\n{emitted}"));
+    assert_eq!(legend, "FN = <built-in FN>");
+    assert!(
+        !emitted.contains(" = ;"),
+        "no legend entry may be nothing but a comment; got:\n{emitted}"
+    );
+}
+
 #[test]
 fn the_plugin_is_named_debug() {
     let installed = plugin(DebugOptions::quiet());
