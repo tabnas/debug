@@ -324,9 +324,18 @@ accepts the publish. Pushing a tag by hand is the orchestrator's path
 
 The steps, in order:
 
-1. Bump all **three** version sites together — `ts/package.json`, `VERSION`
-   in `ts/src/debug.ts` and `const VERSION` in `go/debug.go`. Drift is
-   caught by `ts/test/version.test.js` and `go/version_test.go`.
+1. Bump all **five** version sites together — `ts/package.json`, `VERSION`
+   in `ts/src/debug.ts`, `const VERSION` in `go/debug.go`, `version` in
+   `rs/Cargo.toml`, and `pub const VERSION` in `rs/src/lib.rs`. Drift is
+   caught by `ts/test/version.test.js`, `go/version_test.go` and
+   `rs/tests/version_test.rs`.
+
+   The Rust crate is not itself published — it depends on the engine by
+   path and the engine crate is unpublished — but its constants are gated
+   all the same, so a bump that skips them fails `cargo test` on the very
+   commit `ci.yml` is meant to gate. There is no Rust job in `ci.yml`
+   today either (see the CI section), so nothing catches that for you
+   remotely: run `make test-rs` on the bump commit before merging it.
 2. Verify against the **published** dependencies rather than your checkout.
    The release runner installs fresh from the registry; a working tree
    usually does not, so reproduce that before believing anything:
@@ -446,8 +455,9 @@ either:
 - `publish-ts` runs a local `npm publish`, which goes out over a token and
   bypasses the OIDC trusted publishing the workflow uses.
 - `publish-go V=x.y.z` breaks the version invariant: it `sed`s and stages
-  **only** `go/debug.go`, leaving `ts/package.json` and `VERSION` in
-  `ts/src/debug.ts` on the previous version — the exact state the version
+  **only** `go/debug.go`, leaving `ts/package.json`, `VERSION` in
+  `ts/src/debug.ts`, and the two Rust sites (`rs/Cargo.toml`,
+  `rs/src/lib.rs`) on the previous version — the exact state the version
   tests exist to reject. Its `test-go` prerequisite also runs *before* the
   `sed`, so what it verifies is not what it tags.
 
