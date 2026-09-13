@@ -13,7 +13,7 @@ const { Debug } = require('@tabnas/debug')
 ## Attach the plugin without side effects
 
 By default the plugin prints a description on every `use()` and turns
-tracing on. To attach it quietly and call its methods yourself, disable
+tracing on. To attach it without any output and call its methods yourself, disable
 both:
 
 ```js
@@ -110,7 +110,7 @@ m.graph.find((g) => g.name === 'add').openPush         // => []
 ## Diff two grammars
 
 Because `model()` is JSON-serialisable, you can snapshot a grammar and
-compare it to another — a quick way to see what a refactor or a plugin
+compare it to another: a quick way to see what a refactor or a plugin
 change did. Compare the grammar-structure fields (skip `lexer`, whose
 `matcher`/`make` carry runtime names):
 
@@ -142,7 +142,7 @@ JSON.stringify(a) === JSON.stringify(b)   // => true
 ## Render a grammar as ABNF
 
 `abnf()` emits the live grammar as ABNF text. It reads only the running
-engine — it never imports an ABNF library — so it works on any grammar,
+engine (it never imports an ABNF library) so it works on any grammar,
 hand-written or plugin-supplied.
 
 ```js
@@ -169,7 +169,7 @@ round-trip contract.
 ## Capture trace output (instead of printing to the console)
 
 Tracing logs to the instance's console provider. Supply your own
-`get_console()` to capture the lines — useful in tests, or to write
+`get_console()` to capture the lines, which is useful in tests, or to write
 trace output somewhere other than `console`:
 
 ```js
@@ -223,7 +223,7 @@ lines.filter((l) => l.includes('  lex')).length          // => 0
 ## Print a description automatically after each `use()`
 
 Leave `print: true` (the default) and the plugin logs `USE:` plus a full
-`describe()` dump every time a *later* plugin is applied — handy while
+`describe()` dump every time a *later* plugin is applied, which is handy while
 authoring a stack of grammar plugins. (The first `use()` is the one that
 installs the print wrapper, so the dump appears from the second `use()`
 onward.)

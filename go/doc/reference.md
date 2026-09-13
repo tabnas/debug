@@ -3,7 +3,7 @@
 The exact API surface of `github.com/tabnas/debug/go` (package
 `tabnasdebug`). This is the Go port of the canonical TypeScript
 implementation; the TypeScript [reference](../../ts/doc/reference.md) is
-authoritative. The Go surface differs in shape — those differences are
+authoritative. The Go surface differs in shape; those differences are
 listed here and explained in [concepts](concepts.md).
 
 ## Import
@@ -25,7 +25,7 @@ import tabnasdebug "github.com/tabnas/debug/go"
 | `VERSION` | `string` | The module version. Always equal to `ts/package.json` "version"; `version_test.go` fails the build if they drift. |
 | `DebugModel`, `DebugTokenInfo`, `DebugTokenSet`, `DebugAltInfo`, `DebugRuleInfo`, `DebugRuleEdges`, `DebugLexMatcher`, `DebugConfigInfo`, `DebugPluginInfo` | structs | The typed shape of `Model`'s result, mirroring the TS exported types. |
 
-## `Debug` — the plugin
+## `Debug`: the plugin
 
 ```go
 func Debug(j *tabnas.Tabnas, opts map[string]any) error
@@ -46,14 +46,14 @@ subscribers is returned as an `"internal"`-code `*tabnas.TabnasError`.
 
 `trace` handling mirrors the TypeScript `true | false | object`:
 
-- `true` — log every kind (`step`, `rule`, `lex`, `parse`, `node`, `stack`);
-- an explicit `false` (or a `*bool` false) — off;
+- `true`. Log every kind (`step`, `rule`, `lex`, `parse`, `node`, `stack`);
+- an explicit `false` (or a `*bool` false) turns it off;
 - a per-kind map (`map[string]any` or `map[string]bool` of kind →
-  boolean) — on; the map is merged over the all-true defaults, so a
+  boolean) turns it on; the map is merged over the all-true defaults, so a
   partial map cannot turn other kinds off implicitly (set them `false`
-  explicitly) — matching the engine-side deep-merge of `Debug.defaults`
+  explicitly), matching the engine-side deep-merge of `Debug.defaults`
   in TypeScript;
-- absent (or `opts` is `nil`) — falls back to `Defaults["trace"]` (on).
+- absent (or `opts` is `nil`) falls back to `Defaults["trace"]` (on).
 
 ## `Use(j, plugin, opts...) (error)`
 
@@ -85,7 +85,7 @@ sections, in this order, with these exact headers:
 
 | Header | Contents |
 |---|---|
-| `========= INSTANCE ========` | The instance tag (`tag:`). Printed verbatim; the engine defaults an unset tag to `tabnas.DefaultTag` (`-`), matching TS. Engines older than that alignment leave it empty and render a bare `tag:` — see [`../../docs/reference.md`](../../docs/reference.md). |
+| `========= INSTANCE ========` | The instance tag (`tag:`). Printed verbatim; the engine defaults an unset tag to `tabnas.DefaultTag` (`-`), matching TS. Engines older than that alignment leave it empty and render a bare `tag:`; see [`../../docs/reference.md`](../../docs/reference.md). |
 | `========= TOKENS ========` | Each token: name, tin, fixed source text (if any). Then a token-set sub-block (`IGNORE`, `VAL`, `KEY`) listing member token names. |
 | `========= RULES =========` | Each rule's push/replace transition tree: distinct rule-name targets reached by open-push (`op`), open-replace (`or`), close-push (`cp`), close-replace (`cr`). Empty categories omitted; function-valued targets render as `<F>`. |
 | `========= ALTS =========` | Each rule's open/close alternates: token sequence, push (`p`), replace (`r`), backtrack (`b`), counters (`n`), group (`g`), the action/condition/modifier flags (`A`/`C`/`H`), declarative condition (`CD`). A nil alternate renders as `***INVALID***`. |
@@ -153,10 +153,10 @@ type DebugAltInfo struct {
 }
 ```
 
-`Seq` entries are token *names* (e.g. `"#NR"`); a multi-token lookahead
+`Seq` entries are token *names* (for example `"#NR"`); a multi-token lookahead
 position is a nested `[]any` of names (so the field round-trips through
 JSON unchanged), and a wildcard (unconstrained) position is the empty
-string. A nil alternate — the Go counterpart of the TS null alt entry —
+string. A nil alternate (the Go counterpart of the TS null alt entry)
 renders defensively as the single entry `"***INVALID***"`.
 
 Like `Describe`, `Model` returns an error to uphold the no-panic
@@ -201,8 +201,8 @@ tracing are on by default (a bare `true` for trace enables every kind).
 When tracing is on, each parse begins with a `========= TRACE ==========`
 banner, then each enabled kind writes one line per event to `opts["out"]`
 (default `os.Stdout`). Every TypeScript trace kind has a Go stream; most
-lines lead with the parse state — the upcoming source, the token window
-`[src0 src1]~[name0 name1]`, and the parse depth — mirroring the TS
+lines lead with the parse state (the upcoming source, the token window
+`[src0 src1]~[name0 name1]`, and the parse depth) mirroring the TS
 `descParseState` prefix.
 
 | Kind | Line prefix | Logs |

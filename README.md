@@ -12,7 +12,7 @@ Debug / introspection plugin for the
 *visible*: `model()` returns a structured description of an engine's
 installed grammar (rules, tokens, plugins), `describe()` renders it as
 text, `abnf()` re-expresses it as ABNF, and `trace` logs a parse step by
-step. A dev/test aid for authoring and inspecting grammars — **never a
+step. A dev/test aid for authoring and inspecting grammars, and **never a
 runtime dependency**.
 
 Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
@@ -36,8 +36,8 @@ typeof tn.debug.describe()  // => 'string'
 | [`go/`](go/) | Go (`github.com/tabnas/debug/go`, package `tabnasdebug`). Tracks `ts/`. |
 
 The TypeScript implementation is the source of truth; the Go port mirrors
-its behaviour — including the structured `Model`, the granular trace
-kinds, and the `print` option (as `tabnasdebug.Use`) — as far as the Go
+its behaviour (including the structured `Model`, the granular trace
+kinds, and the `print` option, as `tabnasdebug.Use`) as far as the Go
 engine API allows. The remaining shape differences are documented in
 [`docs/reference.md`](docs/reference.md).
 
