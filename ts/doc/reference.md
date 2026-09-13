@@ -31,7 +31,7 @@ Applying the plugin attaches a `debug` object to the instance and, unless
 disabled, wraps `use()` to print a description and installs parse-trace
 logging.
 
-## Options — `DebugOptions`
+## Options: `DebugOptions`
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -40,12 +40,12 @@ logging.
 
 `trace` accepts:
 
-- `true` — log every kind.
-- `false` — log nothing.
-- an object of `kind -> boolean` — log only the kinds set to `true`. The
+- `true`. Log every kind.
+- `false`. Log nothing.
+- an object of `kind -> boolean`. Log only the kinds set to `true`. The
   kinds are `step`, `rule`, `lex`, `parse`, `node`, `stack`. The engine
   deep-merges `Debug.defaults` (all kinds `true`) with your object, so a
-  partial object cannot turn other kinds off implicitly — set them
+  partial object cannot turn other kinds off implicitly; set them
   `false` explicitly.
 
 `Debug.defaults`:
@@ -133,7 +133,7 @@ type DebugAltInfo = {
 }
 ```
 
-`seq` entries are token *names* (e.g. `'#NR'`); a multi-token lookahead
+`seq` entries are token *names* (for example `'#NR'`); a multi-token lookahead
 position is a nested `string[]`. A null entry renders as the literal
 string `'***INVALID***'`. `push`/`replace` are the literal target rule
 name, or `'<fn>'` for a function-valued target. `back`, `counters`,
@@ -188,7 +188,7 @@ library. See [concepts](concepts.md) for the round-trip contract.
 ## Trace output
 
 When `trace` is on, each parse event logs one line to the instance's
-console provider — `config.debug.get_console()`, which defaults to the
+console provider, `config.debug.get_console()`, which defaults to the
 global `console`. Supply a custom `get_console()` (via the instance
 options `{ debug: { get_console } }`) to capture or redirect the lines.
 
@@ -208,13 +208,13 @@ window `[t0 t1]~[tin0 tin1]`, and the parse depth. The kinds:
 ## No-side-effects guarantee
 
 `describe()`, `model()` and `abnf()` are read-only snapshots of the
-instance — they never alter the grammar or the parse. A malformed grammar
-(e.g. a null entry in an alternate's token sequence) is rendered
+instance; they never alter the grammar or the parse. A malformed grammar
+(for example a null entry in an alternate's token sequence) is rendered
 defensively (`***INVALID***`) rather than throwing.
 
 ## Dependency note
 
 `@tabnas/debug` is a development/test aid, not a runtime dependency. It is
-never required to *run* a grammar — only to inspect or author one. The
+never required to *run* a grammar, only to inspect or author one. The
 ABNF emitter deliberately does not depend on `@tabnas/abnf`; it reads only
 the live engine.

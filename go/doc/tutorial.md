@@ -41,7 +41,7 @@ func main() {
 }
 ```
 
-A bare instance carries no grammar of its own — the engine ships none — so
+A bare instance carries no grammar of its own (the engine ships none) so
 the report is mostly empty. Add a grammar so it has content.
 
 ## 2. Build a small grammar by hand
@@ -98,8 +98,8 @@ sections in this exact order: `INSTANCE`, `TOKENS`, `RULES`, `ALTS`,
 `LEXER`, `CONFIG`, `PLUGIN`, `ABNF`.
 
 For the `add` grammar above, the `RULES` section shows the push/replace
-transition tree — `val` open-pushes into `add` (`op: add`), and `add`
-close-replaces back into `add` (`cr: add`) — and the `ALTS` section shows
+transition tree (`val` open-pushes into `add` (`op: add`), and `add`
+close-replaces back into `add` (`cr: add`)) and the `ALTS` section shows
 each alternate's token sequence and actions.
 
 The error return is the Go difference: `Describe` upholds the engine's
@@ -110,7 +110,7 @@ crash. For a well-formed instance the error is `nil`.
 ## 4. Render the grammar as ABNF
 
 `Abnf` re-expresses the live grammar as
-[ABNF](https://www.rfc-editor.org/rfc/rfc5234) text — productions, then a
+[ABNF](https://www.rfc-editor.org/rfc/rfc5234) text: productions, then a
 legend defining each token:
 
 ```go
@@ -139,7 +139,7 @@ func main() {
 ```
 
 The optional `+ add` continuation became `[ PL add ]`, `PL` is the literal
-`"+"`, and the number token — which has no ABNF literal — is shown as the
+`"+"`, and the number token (which has no ABNF literal) is shown as the
 prose value `<number>`. Like `Describe`, `Abnf` returns `(string, error)`.
 
 ## 5. Trace a parse
@@ -188,7 +188,7 @@ The trace mirrors the TypeScript kinds: `step` (loop counter), `stack`
 `node` (the node built so far). Most lines lead with the upcoming source,
 the token window and the parse depth. Read them top to bottom to watch
 the parser descend into the input and come back out. Pass a per-kind map
-under `"trace"` to select individual streams — see the
+under `"trace"` to select individual streams; see the
 [guide](guide.md).
 
 ## What you have learned

@@ -6,7 +6,7 @@ Debug / introspection plugin for the
 It makes a grammar *visible*: a structured `model()` and a printable
 `describe()` return a description of an instance's installed grammar
 (rules, tokens, plugins), `abnf()` re-expresses it as ABNF, and `trace`
-logs a parse step by step. A dev/test aid — never a runtime dependency.
+logs a parse step by step. A dev/test aid, never a runtime dependency.
 
 ## Install
 
@@ -33,7 +33,7 @@ m.plugins.map((p) => p.name)      // => ['Debug']
 Array.isArray(m.rules)            // => true
 ```
 
-## Structured output — `model()`
+## Structured output: `model()`
 
 `describe()` renders the instance as text; `model()` returns the same
 information as a typed, JSON-serialisable object (`DebugModel`):
@@ -41,7 +41,7 @@ information as a typed, JSON-serialisable object (`DebugModel`):
 | field | what it holds |
 |---|---|
 | `tag` | the instance tag |
-| `tokens` | `{ tin, name, fixed? }[]` — the token table |
+| `tokens` | `{ tin, name, fixed? }[]`, the token table |
 | `tokenSets` | named token sets → member tins |
 | `rules` | each rule's `open` / `close` alternates as `{ seq, push, replace, back, counters, groups, action, cond, modifier }` |
 | `graph` | per-rule push/replace edges (`openPush`, `openReplace`, `closePush`, `closeReplace`) |
@@ -54,11 +54,11 @@ The grammar-structure fields round-trip through `JSON.stringify`.
 
 ## Documentation
 
-- [Tutorial](doc/tutorial.md) — zero to a working inspection, step by step.
-- [How-to guide](doc/guide.md) — focused recipes (diff grammars, capture
+- [Tutorial](doc/tutorial.md). Zero to a working inspection, step by step.
+- [How-to guide](doc/guide.md). Focused recipes (diff grammars, capture
   traces, round-trip ABNF).
-- [Reference](doc/reference.md) — the exact exports, options and types.
-- [Concepts](doc/concepts.md) — how it works and why.
+- [Reference](doc/reference.md). The exact exports, options and types.
+- [Concepts](doc/concepts.md). How it works and why.
 
 The Go port lives in [`../go`](../go) and tracks this implementation.
 

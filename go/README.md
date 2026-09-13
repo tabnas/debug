@@ -9,12 +9,12 @@ grammar (tokens, rules, plugins) as labelled text, `Model` returns the
 same information as structured, JSON-serialisable data, `Abnf`
 re-expresses it as ABNF, and `trace` logs a parse step by step (the
 TypeScript trace kinds `step`, `rule`, `lex`, `parse`, `node`, `stack`).
-A dev/test aid — never a runtime dependency.
+A dev/test aid, never a runtime dependency.
 
 This is the Go port of the canonical TypeScript implementation in
 [`../ts`](../ts); the TypeScript version is authoritative and this package
 tracks it. The Go engine exposes tracing and introspection through
-different idioms, so the surface differs in shape — package functions
+different idioms, so the surface differs in shape: package functions
 returning errors instead of instance methods, and a `tabnasdebug.Use`
 wrapper for the `print` option. See [the concepts doc](doc/concepts.md)
 and [reference](doc/reference.md) for the details.
@@ -57,15 +57,15 @@ func main() {
 
 ## Documentation
 
-- [Tutorial](doc/tutorial.md) — zero to a working inspection, step by step.
-- [How-to guide](doc/guide.md) — focused recipes.
-- [Reference](doc/reference.md) — the exact exports, options and output.
-- [Concepts](doc/concepts.md) — how it works and how it differs from the
+- [Tutorial](doc/tutorial.md). Zero to a working inspection, step by step.
+- [How-to guide](doc/guide.md). Focused recipes.
+- [Reference](doc/reference.md). The exact exports, options and output.
+- [Concepts](doc/concepts.md). How it works and how it differs from the
   TypeScript version.
 
 ## Build and test
 
-The engine is an ordinary module requirement pinned in `go.mod` — there
+The engine is an ordinary module requirement pinned in `go.mod`, so there
 is no `replace` and nothing to fetch:
 
 ```bash
@@ -74,9 +74,9 @@ cd go && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go t
 
 Or, from the repository root, `make test-go`. `GOWORK=off` pins the
 engine to that published version; omitting it resolves the sibling
-`../../parser/go` via the repo-set `go.work`. CI does the latter — it
+`../../parser/go` via the repo-set `go.work`. CI does the latter: it
 generates a workspace over the cloned siblings and tests against parser
-`main` — so both resolutions need to pass.
+`main`, so both resolutions need to pass.
 
 ## License
 

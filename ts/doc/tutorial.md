@@ -17,7 +17,7 @@ cd ts && npm install && npm run build
 ## 1. Load the plugin
 
 The debug plugin attaches a `debug` object to a `Tabnas` instance. Pass
-`{ print: false, trace: false }` for now so it stays quiet — you will
+`{ print: false, trace: false }` for now so it stays quiet; you will
 call its methods explicitly.
 
 ```js
@@ -31,7 +31,7 @@ typeof tn.debug.describe        // => 'function'
 typeof tn.debug.model           // => 'function'
 ```
 
-A bare instance carries no grammar of its own — the engine ships none —
+A bare instance carries no grammar of its own (the engine ships none)
 so there is nothing interesting to inspect yet. Load a grammar so the
 description has content.
 
@@ -117,7 +117,7 @@ Every field of the model is described in the [reference](reference.md).
 ## 5. Render the grammar as ABNF
 
 `abnf()` re-expresses the live grammar as [ABNF](https://www.rfc-editor.org/rfc/rfc5234)
-text — productions, then a legend defining each token:
+text: productions, then a legend defining each token:
 
 ```js
 const { Tabnas } = require('@tabnas/parser')

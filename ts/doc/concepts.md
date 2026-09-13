@@ -6,7 +6,7 @@ API, see the [reference](reference.md); for tasks, the [guide](guide.md).
 ## What the plugin is for
 
 `@tabnas/debug` is an introspection plugin. It does not change how a
-grammar parses — it makes a grammar *visible*. It answers questions you
+grammar parses: it makes a grammar *visible*. It answers questions you
 have while authoring or reviewing a grammar:
 
 - What tokens and rules does this instance actually have?
@@ -16,7 +16,7 @@ have while authoring or reviewing a grammar:
 - What is the parser doing, step by step, on a given input?
 
 It is a development and test aid. It is **never a runtime dependency**: a
-grammar you ship does not need the debug plugin to parse — only to inspect
+grammar you ship does not need the debug plugin to parse, only to inspect
 or describe.
 
 ## The engine relationship
@@ -60,21 +60,21 @@ output stays free to evolve its layout because tests target the model.
 
 The model is a faithful, structured snapshot of the grammar:
 
-- **tokens / tokenSets** — the token table (tin, name, fixed literal) and
+- **tokens / tokenSets**. The token table (tin, name, fixed literal) and
   the named token sets (`IGNORE`, `VAL`, `KEY`, …).
-- **rules** — every rule, with its `open` and `close` alternates. Each
+- **rules**. Every rule, with its `open` and `close` alternates. Each
   alternate (`DebugAltInfo`) records its lookahead token sequence, any
   push/replace target, backtrack, counters, group tags, and whether it
   carries an action / condition / modifier.
-- **graph** — the rule-reference graph: for each rule, the distinct rules
+- **graph**. The rule-reference graph: for each rule, the distinct rules
   it can push into or replace with, split by open/close phase. This is the
-  alternates' targets de-duplicated — a quick map of how the grammar's
+  alternates' targets de-duplicated: a quick map of how the grammar's
   rules connect.
-- **lexer** — the ordered list of lexer matchers.
-- **config** — the start rule, the finish flag, the safe-key setting, and
+- **lexer**. The ordered list of lexer matchers.
+- **config**. The start rule, the finish flag, the safe-key setting, and
   which built-in lexers are enabled.
-- **plugins** — the applied plugins and their options.
-- **abnf** — the grammar as ABNF text.
+- **plugins**. The applied plugins and their options.
+- **abnf**. The grammar as ABNF text.
 
 The `rules` and `graph` fields are two views of the same thing: `rules`
 is the full alternate detail, `graph` is the connectivity summary derived
@@ -98,7 +98,7 @@ nor the reverse).
 The emitter is the *empirical inverse* of the ABNF compiler's forward
 encoding. The contract, exercised by the round-trip test, is: take an
 ABNF source `A0`, compile it to a grammar, install it, call `abnf()` to
-get `A1`, recompile `A1` to a second grammar — and the two grammars must
+get `A1`, recompile `A1` to a second grammar, and the two grammars must
 *recognise the same inputs identically* (same parse success/failure, same
 top rule). ABNF has no actions, so output *values* are out of scope; only
 recognition round-trips.
@@ -108,7 +108,7 @@ Several encodings exist precisely to make that round-trip hold:
 - An epsilon close alternate marks an optional continuation, which the
   emitter renders as `[ ... ]` so repetition/optional shapes survive.
 - A backtrack (`b`) together with a push/replace means the token
-  sequence is a predictive *peek* — matched to choose the alternate but
+  sequence is a predictive *peek*, matched to choose the alternate but
   consumed by the pushed rule. Emitting those tokens as terminals would
   double-count the input, so the emitter skips them.
 - An *empty open* alternate is what makes a kept `*(…)` rule
@@ -118,15 +118,15 @@ Several encodings exist precisely to make that round-trip hold:
   every `/` needs a concatenation after it, and `x = A x /` is a syntax
   error. `@tabnas/abnf` accepts it; other ABNF tools do not.
 - Rule names are mapped to `rulename = ALPHA *(ALPHA / DIGIT / "-")`.
-  Engine names are not so constrained — the ABNF compiler synthesises
+  Engine names are not so constrained: the ABNF compiler synthesises
   `_gen1_star_term` and `…$alt0`, and a regex token arrives as
-  `RX___U0030__U0039` — so each is sanitised once (`_gen1_star_term` →
+  `RX___U0030__U0039`, so each is sanitised once (`_gen1_star_term` →
   `r-gen1-star-term`) and the same result is used for the production and
   every reference to it. Names that are already legal keep their
   spelling; a collision after sanitising takes a numeric suffix.
 
 Both of those are about the output being usable *outside* this project.
-Re-compiling with `@tabnas/abnf` is not evidence of validity — it is
+Re-compiling with `@tabnas/abnf` is not evidence of validity; it is
 lenient about exactly these two things.
 
 **The target dialect is RFC 5234 as updated by
@@ -136,7 +136,7 @@ addition. That is what current ABNF tooling implements, and the pure-5234
 alternatives are worse: `%x48.69` is unreadable, and a bare char-val would
 silently lose the case-sensitivity.
 
-Constructs ABNF cannot express — an arbitrary match regex — are emitted as
+Constructs ABNF cannot express (an arbitrary match regex) are emitted as
 ABNF comments (`; /.../`) rather than dropped. The output stays valid
 ABNF text and self-documents what was lost, but such a grammar does not
 round-trip.
@@ -149,7 +149,7 @@ round-trip.
   stays useful while you are mid-edit and the grammar is broken.
 - **Text and data both.** Keeping `describe()` *and* `model()` costs some
   duplication (each section is produced twice), but it serves the two
-  audiences — humans and tooling — without forcing one to consume the
+  audiences (humans and tooling) without forcing one to consume the
   other's format.
 - **Diffable layout.** The `describe()` section headers are fixed and
   shared with the Go port via a golden fixture, so dumps from either
