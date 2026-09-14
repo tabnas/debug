@@ -19,6 +19,7 @@ on:
     paths:
       - 'rs/**'
       - 'test/spec/**'
+      - 'ts/src/debug.ts'
       - 'ts/package.json'
       - 'ci/rust/**'
       - '.github/workflows/rust.yml'
@@ -26,6 +27,7 @@ on:
     paths:
       - 'rs/**'
       - 'test/spec/**'
+      - 'ts/src/debug.ts'
       - 'ts/package.json'
       - 'ci/rust/**'
       - '.github/workflows/rust.yml'

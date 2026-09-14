@@ -31,7 +31,16 @@ cd "$ROOT/rs"
 # by bumping the sibling's version and re-running: `--locked` fails, the
 # plain build succeeds. The engine repo has no path dependency of its
 # own, which is why `--locked` is right there and wrong here.
-cargo fmt --all --check
+# NOT `--all`. cargo defines it as "all packages, and also their local
+# path-based dependencies", and the engine IS such a dependency, so
+# `--all` reaches into the sibling parser checkout: an unformatted file
+# over there fails this gate even when every file here is clean, and a
+# contributor with dirty sibling work cannot run it at all. Verified both
+# ways -- with the sibling made unformatted, `--all --check` reports a
+# diff in parser/rs and plain `--check` stays silent, while a dirty file
+# in THIS crate still fails plain `--check`. The engine repo has no path
+# dependency, which is why `--all` is safe there and not here.
+cargo fmt --check
 cargo build --all-targets
 cargo test --all-targets
 cargo clippy --all-targets --all-features -- -D warnings
