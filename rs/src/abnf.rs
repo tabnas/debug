@@ -38,8 +38,23 @@ use tabnas::{AltSpec, RuleSpec, Tabnas, Tin};
 /// Distinct source names can sanitise to the same string (`a_b` and `a-b`
 /// both give `a-b`), so collisions get a numeric suffix — without it the
 /// grammar would silently merge two rules.
+///
+/// RULES AND TOKENS ARE SEPARATE NAMESPACES, which is what the two caches
+/// are for. A token's bare name and a rule's name come from different
+/// sources and can coincide: `#NR` beside a rule called `NR` is ordinary.
+/// One shared cache merged them — the token looked up `NR`, hit the entry
+/// `new` had made for the RULE, and the emitter wrote the rule's own name
+/// for a terminal. A grammar whose rule `NR` referenced token `#NR` came
+/// out as a self-referential `NR = NR` plus a second `NR = <number>`
+/// definition: two definitions of one rule with `=` rather than
+/// incremental `=/`, and a production that recognises nothing.
+///
+/// Keeping the caches apart while sharing `taken` is the fix. A token
+/// still sanitises the same way, but allocates against everything already
+/// claimed, so it suffixes to `NR-2` instead of borrowing the rule's name.
 struct AbnfNamer {
-    cache: IndexMap<String, String>,
+    rule_cache: IndexMap<String, String>,
+    token_cache: IndexMap<String, String>,
     /// Claimed names, lowercased. RFC 5234 §2.1: "ABNF rule names are
     /// case-insensitive", so `Foo-Bar` and `foo-bar` ARE the same rule and
     /// the collision check has to fold case — comparing exact spellings
@@ -63,13 +78,14 @@ impl AbnfNamer {
     /// rename the user's real `foo-bar` rule out from under them.
     fn new(reserve: impl IntoIterator<Item = String>) -> Self {
         let mut namer = Self {
-            cache: IndexMap::new(),
+            rule_cache: IndexMap::new(),
+            token_cache: IndexMap::new(),
             taken: BTreeSet::new(),
         };
         for name in reserve {
             if is_legal_abnf_name(&name) && !namer.is_taken(&name) {
                 namer.claim(&name);
-                namer.cache.insert(name.clone(), name);
+                namer.rule_cache.insert(name.clone(), name);
             }
         }
         namer
@@ -83,10 +99,33 @@ impl AbnfNamer {
         self.taken.contains(&name.to_lowercase())
     }
 
-    fn name(&mut self, name: &str) -> String {
-        if let Some(hit) = self.cache.get(name) {
+    /// A rule name. Already-legal names were claimed by `new`, so this is
+    /// a cache hit for every user-authored rule.
+    fn rule(&mut self, name: &str) -> String {
+        if let Some(hit) = self.rule_cache.get(name) {
             return hit.clone();
         }
+        let out = self.allocate(name);
+        self.rule_cache.insert(name.to_string(), out.clone());
+        out
+    }
+
+    /// A token's bare name. A rule may already hold this spelling, and the
+    /// token must not borrow it, so this allocates rather than reading the
+    /// rule cache.
+    fn token(&mut self, bare: &str) -> String {
+        if let Some(hit) = self.token_cache.get(bare) {
+            return hit.clone();
+        }
+        let out = self.allocate(bare);
+        self.token_cache.insert(bare.to_string(), out.clone());
+        out
+    }
+
+    /// Sanitise to a legal rulename, then make it unique against every
+    /// name claimed so far — reserved rule names and previously allocated
+    /// names alike, since `taken` is shared by both namespaces.
+    fn allocate(&mut self, name: &str) -> String {
         let mut out: String = name
             .chars()
             .map(|ch| {
@@ -112,7 +151,6 @@ impl AbnfNamer {
             out = format!("{out}-{suffix}");
         }
         self.claim(&out);
-        self.cache.insert(name.to_string(), out.clone());
         out
     }
 }
@@ -212,7 +250,7 @@ impl<'a> Emitter<'a> {
         for name in ordered {
             let seen = BTreeSet::from([name.clone()]);
             let body = self.emit_body(&name, &seen);
-            let head = self.namer.name(&name);
+            let head = self.namer.rule(&name);
             lines.push(format!("{head} = {body}"));
         }
 
@@ -416,14 +454,14 @@ impl<'a> Emitter<'a> {
         // A user rule, or a kept (non-foldable, e.g. repetition) synthetic
         // rule, stays a bareword reference; only foldable synthetics inline.
         if !self.is_foldable(name) {
-            return self.namer.name(name);
+            return self.namer.rule(name);
         }
         if seen.contains(name) {
             // A foldable loop-back — returning empty terminates the loop.
             return String::new();
         }
         if !self.rules.contains_key(name) {
-            return self.namer.name(name);
+            return self.namer.rule(name);
         }
         let mut inner = seen.clone();
         inner.insert(name.to_string());
@@ -449,15 +487,21 @@ impl<'a> Emitter<'a> {
     fn terminal(&mut self, tin: Tin) -> String {
         let full_name = self.parser.token_name(tin);
         if self.rules.contains_key(&full_name) {
-            return self.namer.name(&full_name);
+            return self.namer.rule(&full_name);
         }
         let bare = full_name
             .strip_prefix('#')
             .unwrap_or(&full_name)
             .to_string();
-        // Strip the '#' sigil first so '#NR' reserves 'NR' rather than
+        // Strip the '#' sigil first so '#NR' asks for 'NR' rather than
         // being sanitised to '-NR' and then prefixed.
-        let name = self.namer.name(&bare);
+        //
+        // This goes through the TOKEN namespace. A rule may already hold
+        // this spelling — a grammar with a rule `NR` and the `#NR` number
+        // token is perfectly ordinary — and the token must not borrow it:
+        // that emitted a self-referential `NR = NR` plus a duplicate
+        // definition. The token namespace suffixes to `NR-2` instead.
+        let name = self.namer.token(&bare);
         if !self.used.contains_key(&name) {
             let form = token_form(self.parser, tin, &full_name);
             self.used.insert(name.clone(), form);
@@ -537,9 +581,9 @@ fn token_form(parser: &Tabnas, tin: Tin, full_name: &str) -> String {
         "UK" => "unknown",
         "BD" => "bad",
         "ZZ" => "end-of-source",
-        _ => return format!("<built-in {bare}>"),
+        _ => return prose_val(&format!("built-in {bare}")),
     };
-    format!("<{described}>")
+    prose_val(described)
 }
 
 /// A literal as an ABNF num-val: `%x0D`, or dot-concatenated for several
@@ -611,8 +655,37 @@ fn regex_to_abnf(source: &str) -> String {
         }
     }
 
-    // Anything else: keep it visible but mark it as non-round-tripping.
-    format!("; /{original}/")
+    // Anything else: no ABNF construct expresses this regex, so say so in
+    // the one the grammar provides for exactly that — RFC 5234 §4
+    // prose-val, "a last resort" for describing a rule in prose. It does
+    // not round-trip, and is not meant to; it is a legal element naming
+    // what the token matches.
+    //
+    // This returned `; /…/` before: a bare comment. `;` runs to end of
+    // line, so the legend entry it produced (`T = ; /…/`) held no elements
+    // at all — not merely non-round-tripping but unparseable, and one such
+    // token made the WHOLE emitted grammar invalid rather than just that
+    // rule.
+    prose_val(&format!("regex /{original}/"))
+}
+
+/// Render `text` as an RFC 5234 §4 prose-val:
+/// `prose-val = "<" *(%x20-3D / %x3F-7E) ">"`. A `>` would close the value
+/// early and anything outside printable ASCII is not permitted, so both are
+/// escaped rather than dropped — the text is here to say what the token
+/// matches, and silently losing characters from it would defeat that.
+fn prose_val(text: &str) -> String {
+    let mut out = String::from("<");
+    for ch in text.chars() {
+        let cp = ch as u32;
+        if (0x20..=0x3d).contains(&cp) || (0x3f..=0x7e).contains(&cp) {
+            out.push(ch);
+        } else {
+            out.push_str(&format!("\\u{cp:04X}"));
+        }
+    }
+    out.push('>');
+    out
 }
 
 /// `[\uXXXX-\uYYYY]` or `[\xXX-\xYY]` as `%xLO-HI`.
@@ -669,16 +742,31 @@ mod tests {
     #[test]
     fn namer_sanitises_and_disambiguates() {
         let mut namer = AbnfNamer::new(["keep-me".to_string()]);
-        assert_eq!(namer.name("keep-me"), "keep-me");
-        assert_eq!(namer.name("a_b"), "a-b");
+        assert_eq!(namer.rule("keep-me"), "keep-me");
+        assert_eq!(namer.rule("a_b"), "a-b");
         // `a-b` sanitises to the same string, so it gets a suffix.
-        assert_eq!(namer.name("a.b"), "a-b-2");
+        assert_eq!(namer.rule("a.b"), "a-b-2");
         // Not starting with a letter gets an `r` prefix.
-        assert_eq!(namer.name("1st"), "r1st");
+        assert_eq!(namer.rule("1st"), "r1st");
         // Case-insensitive collision: `KEEP-ME` folds onto the claim.
-        assert_eq!(namer.name("KEEP-ME"), "KEEP-ME-2");
+        assert_eq!(namer.rule("KEEP-ME"), "KEEP-ME-2");
         // Memoised: the same source name always maps to the same output.
-        assert_eq!(namer.name("a_b"), "a-b");
+        assert_eq!(namer.rule("a_b"), "a-b");
+    }
+
+    #[test]
+    fn namer_keeps_rules_and_tokens_apart() {
+        // A rule `NR` and the built-in `#NR` token is an ordinary grammar.
+        // The token must NOT be handed the rule's name: doing so emitted a
+        // self-referential `NR = NR` plus a duplicate `NR = <number>`.
+        let mut namer = AbnfNamer::new(["NR".to_string()]);
+        assert_eq!(namer.rule("NR"), "NR");
+        assert_eq!(namer.token("NR"), "NR-2");
+        // Each namespace is memoised on its own, and neither drifts.
+        assert_eq!(namer.token("NR"), "NR-2");
+        assert_eq!(namer.rule("NR"), "NR");
+        // A token whose name no rule claims is unaffected.
+        assert_eq!(namer.token("PL"), "PL");
     }
 
     #[test]
@@ -694,9 +782,23 @@ mod tests {
         assert_eq!(regex_to_abnf("(?i)^foo"), "\"foo\"");
         // An escaped literal round-trips through the validation.
         assert_eq!(regex_to_abnf("(?i)^a\\.b"), "\"a.b\"");
-        // A genuine regex is never misread as a literal.
-        assert_eq!(regex_to_abnf("(?i)^a.b"), "; /(?i)^a.b/");
-        assert_eq!(regex_to_abnf("^\\d+"), "; /^\\d+/");
+        // A genuine regex is never misread as a literal. With no ABNF
+        // form it becomes a prose-val, which is an ELEMENT: the bare
+        // `; /…/` comment this used to emit left the legend entry with
+        // nothing in it, so the whole grammar failed to parse.
+        assert_eq!(regex_to_abnf("(?i)^a.b"), "<regex /(?i)^a.b/>");
+        assert_eq!(regex_to_abnf("^\\d+"), "<regex /^\\d+/>");
+    }
+
+    #[test]
+    fn prose_val_escapes_what_it_cannot_hold() {
+        // RFC 5234 §4 allows %x20-3D / %x3F-7E only, so a '>' would close
+        // the value early and must be escaped rather than dropped.
+        assert_eq!(prose_val("plain"), "<plain>");
+        assert_eq!(regex_to_abnf("^a>b"), "<regex /^a\\u003Eb/>");
+        // Every angle-bracket form the emitter produces is a prose-val,
+        // the built-in descriptions included.
+        assert_eq!(prose_val("number"), "<number>");
     }
 
     #[test]

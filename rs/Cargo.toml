@@ -24,3 +24,11 @@ tabnas = { path = "../../parser/rs" }
 indexmap = { version = "2.2", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
+
+[dev-dependencies]
+# Tests only. The `collide` fixture declares a match token, which needs the
+# engine's own regex type; the library never names it (it reads the matcher
+# through `MatchTokenMatcher` and calls `as_str`), so this stays out of
+# `[dependencies]`. Same requirement as the engine's, so cargo unifies them
+# to one version and the types match.
+regex = "1.10"

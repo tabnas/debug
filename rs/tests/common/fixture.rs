@@ -14,7 +14,8 @@
 //! Like the Go registry, these do not install the debug plugin: in Rust
 //! `describe` / `model` / `abnf` are free functions, so they need not.
 
-use tabnas::{AltSpec, Tabnas};
+use regex::Regex;
+use tabnas::{AltSpec, MatchToken, MatchTokenMatcher, Tabnas};
 
 /// bare: the engine with nothing installed. Pins what `describe` emits
 /// for an instance with no grammar at all.
@@ -87,6 +88,48 @@ pub fn greet() -> Tabnas {
     parser
 }
 
+/// collide: the two ABNF cases that used to emit invalid output, in one
+/// grammar. A rule named `NR` sits beside the built-in `#NR` number token,
+/// so the emitter has to keep rule and token names apart — sharing one
+/// namespace gave `NR = NR` plus a duplicate `NR = <number>`. And `#WD` is
+/// a match token whose regex is neither a char range nor a
+/// case-insensitive literal, the case with no ABNF form: it must still
+/// emit an ELEMENT (an RFC 5234 prose-val), because the bare `; /…/`
+/// comment it used to emit left the legend entry with nothing in it.
+pub fn collide() -> Tabnas {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "NR".into();
+    let wd = parser.options.register_token("#WD");
+    parser.options.match_tokens.insert(
+        "#WD".into(),
+        MatchToken {
+            name: "#WD".into(),
+            tin: wd,
+            matcher: MatchTokenMatcher::Regex(Regex::new("^[a-z]+[0-9]*").unwrap()),
+            eager: false,
+        },
+    );
+    let nr = token(&parser, "#NR");
+    let end = token(&parser, "#ZZ");
+
+    parser.define_rule("NR", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![nr]],
+            ..Default::default()
+        });
+        spec.add_open(AltSpec {
+            s: vec![vec![wd]],
+            ..Default::default()
+        });
+        spec.add_close(AltSpec {
+            s: vec![vec![end]],
+            ..Default::default()
+        });
+    });
+    parser
+}
+
 /// Resolve a built-in token identity, failing loudly if the engine has
 /// renamed it out from under the fixture.
 fn token(parser: &Tabnas, name: &str) -> tabnas::Tin {
@@ -102,6 +145,7 @@ pub fn build(name: &str) -> Option<Tabnas> {
         "bare" => Some(bare()),
         "add" => Some(add()),
         "greet" => Some(greet()),
+        "collide" => Some(collide()),
         _ => None,
     }
 }

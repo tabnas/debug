@@ -149,17 +149,15 @@ PL = "+"
 | fixed literal a char-val cannot hold | `%x0D.0A` |
 | match regex, single char range | `%x30-39` |
 | match regex, case-insensitive literal | `"foo"` |
-| any other match regex | `; /…/` (an ABNF comment; see the caveat below) |
+| any other match regex | `<regex /…/>` (an RFC 5234 prose-val) |
 | function-backed match token | `<built-in NAME>`. No ABNF form exists, so it falls through to the description, as the canonical runtime does |
 | built-in lexer token | `<number>`, `<string>`, `<text>`, … |
 
-**Caveat, shared with the canonical runtime:** an unrecognised match regex
-emits a legend entry that is *only* a comment (`T = ; /…/`). Since `;`
-runs to end of line, that leaves a rule with no elements, which is invalid
-ABNF rather than merely non-round-tripping. This port reproduces the
-canonical behaviour deliberately. See
-[`../../docs/reference.md`](../../docs/reference.md) § "Known limitations
-inherited from the canonical runtime".
+Every angle-bracket form here is an RFC 5234 §4 prose-val, the construct
+the grammar provides for describing a rule in prose. A prose-val cannot
+hold a `>` or anything outside printable ASCII, so those are escaped:
+`^a>b` renders as `<regex /^a\u003Eb/>`. Such a token does not
+round-trip, but the grammar still parses.
 
 An instance with no rules emits the empty string.
 

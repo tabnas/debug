@@ -359,31 +359,29 @@ imposed by the Rust engine's public API and by Rust's type system:
     deriving a child re-runs the parent's plugins.
 
 
-## Known limitations inherited from the canonical runtime
+## Two ABNF defects, fixed in the canonical runtime
 
-These are NOT divergences — every runtime behaves this way, because the
-Go and Rust ports faithfully reproduce `ts/src/debug.ts`. They are
-recorded here so they are not rediscovered as port bugs. Fixing one means
-changing the CANONICAL TypeScript first and pinning the corrected
-behaviour in a shared fixture, per the authority rules in `AGENTS.md`;
-changing a port alone would make the emitted ABNF diverge silently.
+`abnf()` had two cases that emitted output no conforming ABNF tool
+accepts. Both were surfaced by an automated review of the Rust port
+(tabnas/debug#37), verified against `ts/src/debug.ts` as canonical
+behaviour rather than port defects, and fixed in tabnas/debug#45 — in
+TypeScript first, then Go and Rust, pinned by the shared `collide`
+fixture that all three run. They are kept here because the old output
+still turns up in grammars captured before the fix.
 
-1. **A token whose bare name matches a rule name collides in `abnf()`.**
-   The emitter seeds its name map with the rule names and strips the `#`
-   from a token before mapping it, so a grammar with a rule `NR` and a
-   token `#NR` gives both the symbol `NR`. The output then carries a
-   self-referential `NR = NR` and a second `NR = …` definition (using
-   `=`, not the incremental `=/`), which is invalid. A fix would allocate
-   token names in their own namespace and apply collision suffixing even
-   when the bare spelling is already claimed by a rule.
+1. **A token whose bare name matched a rule name took the rule's name.**
+   The emitter seeded one name map with the rule names and stripped the
+   `#` from a token before mapping it, so a grammar with a rule `NR` and
+   a token `#NR` gave both the symbol `NR`. The output carried a
+   self-referential `NR = NR` plus a second `NR = …` definition (using
+   `=`, not the incremental `=/`). Rules and tokens are now separate
+   namespaces over one shared claim set, so the token suffixes to `NR-2`.
 
-2. **An unrecognised match regex emits a legend entry that is only a
-   comment.** The fallback is `T = ; /…/`; `;` starts an ABNF comment
-   that runs to end of line, so the rule is left with no elements — not
-   merely non-round-tripping, but unparseable. A fix would emit a prose
-   value or another valid placeholder BEFORE the explanatory comment.
+2. **An unrecognised match regex emitted a legend entry that was only a
+   comment.** The fallback was `T = ; /…/`; `;` starts an ABNF comment
+   that runs to end of line, so the rule was left with no elements — not
+   merely non-round-tripping, but unparseable, and one such token
+   invalidated the whole grammar rather than just that rule. It now emits
+   an RFC 5234 §4 prose-val, `T = <regex /…/>`, which is a real element.
 
-Both were surfaced by an automated review of the Rust port
-(tabnas/debug#37) and verified against `ts/src/debug.ts`. Neither is
-exercised by a shared fixture today; adding one is part of the TypeScript
-fix.
+All three runtimes emit the `collide` fixture byte-for-byte identically.
