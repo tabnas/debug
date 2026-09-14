@@ -20,6 +20,25 @@ fi
 
 cd "$ROOT/rs"
 
+# Run through the MSRV toolchain when one is available. The workflow
+# installs it explicitly, but a contributor running this script gets
+# whatever `cargo` is on their PATH -- and a newer toolchain accepts code
+# and formatting that the MSRV rejects, so the "local and hosted cannot
+# drift" claim this script exists for would hold everywhere except the
+# compiler version. Loud rather than silent when the toolchain is absent,
+# because a quiet fallback is the drift.
+MSRV=$(awk -F'"' '/^rust-version = /{print $2; exit}' Cargo.toml)
+CARGO=(cargo)
+if [[ -n "$MSRV" ]]; then
+  if command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q "^$MSRV"; then
+    CARGO=(cargo "+$MSRV")
+  else
+    echo "warning: MSRV $MSRV is not installed; running on $(rustc --version 2>/dev/null)" >&2
+    echo "         install it with: rustup toolchain install $MSRV" >&2
+    echo "         a newer toolchain can accept what $MSRV rejects" >&2
+  fi
+fi
+
 # Assert the lock's entry for THIS crate still matches the manifest,
 # BEFORE anything runs cargo. Without `--locked` (see below) a cargo
 # command silently rewrites Cargo.lock in the runner, so a version bump
@@ -89,10 +108,15 @@ trap 'rm -f "$LOCK_BEFORE"' EXIT
 # diff in parser/rs and plain `--check` stays silent, while a dirty file
 # in THIS crate still fails plain `--check`. The engine repo has no path
 # dependency, which is why `--all` is safe there and not here.
-cargo fmt --check
-cargo build --all-targets
-cargo test --all-targets
-cargo clippy --all-targets --all-features -- -D warnings
+"${CARGO[@]}" fmt --check
+"${CARGO[@]}" build --all-targets
+"${CARGO[@]}" test --all-targets
+# `--all-targets` does NOT include doctests -- cargo documents the selector
+# as "Test all targets (does not include doctests)" -- so a broken example
+# in the crate docs passes a gate that only runs it. Confirmed against this
+# crate: `--all-targets` printed no Doc-tests section while `--doc` ran one.
+"${CARGO[@]}" test --doc
+"${CARGO[@]}" clippy --all-targets --all-features -- -D warnings
 
 # Now that cargo has had every chance to rewrite it, the lock must still
 # describe the same resolution it did when committed.
