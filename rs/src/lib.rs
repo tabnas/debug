@@ -131,8 +131,7 @@ impl DebugOptions {
 /// against a derived instance's options. Most callers want [`apply`].
 pub fn plugin(options: DebugOptions) -> Plugin {
     Plugin::new("Debug", move |parser, _plugin_options| {
-        install(parser, options);
-        Ok(())
+        install(parser, options)
     })
 }
 
@@ -144,13 +143,13 @@ pub fn apply(parser: &mut Tabnas, options: DebugOptions) -> Result<(), PluginErr
     parser.use_plugin(plugin(options), None).map(|_| ())
 }
 
-fn install(parser: &mut Tabnas, options: DebugOptions) {
+fn install(parser: &mut Tabnas, options: DebugOptions) -> Result<(), PluginError> {
     parser.decorate(PRINT_DECORATION, options.print);
     // Always call through, including for `None`: re-applying the plugin
     // must be able to turn a previously installed trace OFF, not just
     // widen it. `trace::install` registers its callbacks once per
     // instance and updates the live selection thereafter.
-    trace::install(parser, options.trace);
+    trace::install(parser, options.trace)
 }
 
 /// Install `plugin` on `parser`, dumping [`describe`] afterwards when the

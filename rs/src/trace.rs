@@ -25,7 +25,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use tabnas::Tabnas;
+use tabnas::{ParsePrepare, PluginError, Tabnas};
 
 /// Which trace kinds are logged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,13 +89,22 @@ pub const TRACE_BANNER: &str = "\n========= TRACE ==========";
 /// selection.
 const TRACE_DECORATION: &str = "debug.trace";
 
+/// Per-instance trace state shared with that instance's callbacks.
+struct TraceRuntime {
+    instance_id: String,
+    kinds: Mutex<Option<TraceKinds>>,
+}
+
 /// The live selection, shared with the registered callbacks.
-type TraceState = Arc<Mutex<Option<TraceKinds>>>;
+type TraceState = Arc<TraceRuntime>;
 
 /// Read the current selection. A poisoned lock traces nothing rather than
 /// panicking: debugging must not make a parse less reliable.
-fn current(state: &TraceState) -> Option<TraceKinds> {
-    state.lock().ok().and_then(|kinds| *kinds)
+fn current(state: &TraceState, instance_id: &str) -> Option<TraceKinds> {
+    if state.instance_id != instance_id {
+        return None;
+    }
+    state.kinds.lock().ok().and_then(|kinds| *kinds)
 }
 
 /// Install the trace subscribers on `parser`, or update the selection if
@@ -109,29 +118,46 @@ fn current(state: &TraceState) -> Option<TraceKinds> {
 /// once per instance and read a shared selection that later installs
 /// update in place, which is how the canonical runtime's
 /// `__debugUseWrapped` guard behaves for its own wrapper.
-pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) {
+pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) -> Result<(), PluginError> {
     if let Some(state) = parser.decoration::<TraceState>(TRACE_DECORATION).cloned() {
-        if let Ok(mut live) = state.lock() {
-            *live = kinds;
+        if state.instance_id == parser.id {
+            if let Ok(mut live) = state.kinds.lock() {
+                *live = kinds;
+            }
+            return Ok(());
         }
-        return;
     }
 
-    let state: TraceState = Arc::new(Mutex::new(kinds));
-    parser.decorate_opaque(TRACE_DECORATION, state.clone());
+    // Derived parsers inherit decorations and option callbacks, but not
+    // subscribers. Replace the inherited state and named prepare hook with
+    // child-owned versions, then register the child's subscribers below.
+    let state: TraceState = Arc::new(TraceRuntime {
+        instance_id: parser.id.clone(),
+        kinds: Mutex::new(kinds),
+    });
 
     // One banner per parse, as the canonical runtime emits it.
     let live = state.clone();
-    parser.parse_prepare(move |context| {
-        if current(&live).is_some_and(|kinds| kinds.any_live()) {
-            context.options.debug.write(TRACE_BANNER);
-        }
-    });
+    parser.set_options(move |options| {
+        options.parse.named_prepare.insert(
+            "debug".to_string(),
+            ParsePrepare::Context(Arc::new(move |context| {
+                if current(&live, &context.instance.id).is_some_and(|kinds| kinds.any_live()) {
+                    context.options.debug.write(TRACE_BANNER);
+                }
+            })),
+        );
+    })?;
+
+    // Publish the initialized state only after the fallible options rebuild
+    // succeeds. Otherwise a retry would mistake a partial install for a
+    // complete one and skip registering the subscribers below.
+    parser.decorate_opaque(TRACE_DECORATION, state.clone());
 
     {
         let live = state.clone();
         parser.subscribe_lex(move |token, rule, context| {
-            if !current(&live).is_some_and(|kinds| kinds.lex) {
+            if !current(&live, &context.instance.id).is_some_and(|kinds| kinds.lex) {
                 return;
             }
             context.options.debug.write(&format!(
@@ -150,7 +176,9 @@ pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) {
     {
         let live = state.clone();
         parser.subscribe_rules(move |rule, context| {
-            let Some(kinds) = current(&live) else { return };
+            let Some(kinds) = current(&live, &context.instance.id) else {
+                return;
+            };
             if kinds.rule {
                 context.options.debug.write(&format!(
                     "rule  {}{}~{}/{:?} d={} node={}{}",
@@ -181,7 +209,9 @@ pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) {
     {
         let live = state.clone();
         parser.subscribe_rule_done(move |rule, context, done| {
-            let Some(kinds) = current(&live) else { return };
+            let Some(kinds) = current(&live, &context.instance.id) else {
+                return;
+            };
             if kinds.parse {
                 let matched = match &done.alt {
                     Some(alt) => {
@@ -226,6 +256,8 @@ pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) {
             }
         });
     }
+
+    Ok(())
 }
 
 /// Depth indent, matching the canonical runtime's nesting cue.
