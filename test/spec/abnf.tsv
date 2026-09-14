@@ -2,3 +2,4 @@ grammar	abnf
 bare	""
 add	"val = add\nadd = NR [ PL add ]\n\nNR = <number>\nPL = \"+\""
 greet	"greet = HI / HE\n\nHI = %s\"hi\"\nHE = %s\"hello\""
+collide	"NR = NR-2 / WD\n\nNR-2 = <number>\nWD   = <regex /^[a-z]+[0-9]*/>"

@@ -65,7 +65,7 @@ alternate marks an optional continuation, rendered as `[ ... ]`; and a
 backtrack (`B`) with a push/replace marks a predictive *peek* whose tokens
 the pushed rule consumes, so they are skipped here to avoid
 double-counting the input. Constructs ABNF cannot express are emitted as
-ABNF comments (`; /.../`) so the output stays valid text.
+an RFC 5234 prose-val (`<regex /.../>`) so the output still parses.
 
 Two more exist to keep the output valid *outside* this project, matching
 the TypeScript emitter. An *empty open* alternate (what makes a kept
@@ -74,7 +74,10 @@ the TypeScript emitter. An *empty open* alternate (what makes a kept
 requires a concatenation after every `/`. And rule names are mapped to
 `rulename = ALPHA *(ALPHA / DIGIT / "-")`, so a synthetic `_gen1_star_T`
 is emitted as `r-gen1-star-T`, using the same name for the production and
-every reference to it.
+every reference to it. Rules and tokens are named in separate namespaces,
+so a grammar with a rule `NR` and the built-in `#NR` token emits
+`NR = NR-2` with the token defined as `NR-2`, rather than one name
+standing for both.
 
 The target dialect is RFC 5234 as updated by
 [RFC 7405](https://www.rfc-editor.org/rfc/rfc7405): everything emitted is

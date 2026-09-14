@@ -52,6 +52,28 @@ function greet() {
   return tn
 }
 
-const GRAMMARS = { bare, add, greet }
+// collide: the two ABNF cases that used to emit invalid output, in one
+// grammar. A rule named `NR` sits beside the built-in `#NR` number token, so
+// the emitter has to keep rule and token names apart — sharing one namespace
+// gave `NR = NR` plus a duplicate `NR = <number>`. And `#WD` is a match token
+// whose regex is neither a char range nor a case-insensitive literal, the
+// case with no ABNF form: it must still emit an ELEMENT (an RFC 5234
+// prose-val), because the bare `; /…/` comment it used to emit left the
+// legend entry with nothing in it.
+function collide() {
+  const tn = new Tabnas({
+    match: { token: { '#WD': /^[a-z]+[0-9]*/ } },
+    rule: { start: 'NR' },
+  })
+  tn.use(Debug, { print: false, trace: false })
+  tn.rule('NR', (rs) =>
+    rs
+      .clear()
+      .open([{ s: ['#NR'] }, { s: ['#WD'] }])
+      .close([{ s: ['#ZZ'] }]))
+  return tn
+}
+
+const GRAMMARS = { bare, add, greet, collide }
 
 module.exports = { GRAMMARS }

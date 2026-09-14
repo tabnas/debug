@@ -162,8 +162,9 @@ tn.debug.abnf()
 ```
 
 Constructs that ABNF cannot express (an arbitrary match regex) are
-emitted as ABNF comments (`; /.../`) so the output stays valid text; such
-a grammar will not round-trip. See [concepts](concepts.md) for the
+emitted as an RFC 5234 prose-val (`<regex /.../>`), which is a real
+element, so the output still parses; such a grammar will not
+round-trip. See [concepts](concepts.md) for the
 round-trip contract.
 
 ## Capture trace output (instead of printing to the console)

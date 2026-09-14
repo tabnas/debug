@@ -17,6 +17,7 @@
 [Ff]unc
 [Ll]ookahead
 [Mm]atchers
+[Nn]amespaces
 [Nn]pm
 [Rr]untimes
 [Ss]tdout

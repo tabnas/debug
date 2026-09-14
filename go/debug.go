@@ -688,9 +688,24 @@ var (
 // both give `a-b`), so collisions take a numeric suffix — without it the
 // grammar would silently merge two rules.
 //
+// RULES AND TOKENS ARE SEPARATE NAMESPACES, which is what the two returned
+// functions are for. A token's bare name and a rule's name come from
+// different sources and can coincide: `#NR` beside a rule called `NR` is
+// ordinary. One shared cache merged them — the token looked up `NR`, hit the
+// entry the reserve loop had made for the RULE, and the emitter wrote the
+// rule's own name for a terminal. A grammar whose rule `NR` referenced token
+// `#NR` came out as a self-referential `NR = NR` plus a second
+// `NR = <number>` definition: two definitions of one rule with `=` rather
+// than incremental `=/`, and a production that recognises nothing.
+//
+// Keeping the caches apart while sharing `taken` is the fix. A token still
+// sanitises the same way, but allocates against everything already claimed,
+// so it suffixes to `NR-2` instead of borrowing the rule's name.
+//
 // Mirrors the TS abnfNamer().
-func abnfNamer(reserve []string) func(string) string {
-	cache := map[string]string{}
+func abnfNamer(reserve []string) (ruleName func(string) string, tokenName func(string) string) {
+	ruleCache := map[string]string{}
+	tokenCache := map[string]string{}
 
 	// RFC 5234 §2.1: "ABNF rule names are case-insensitive." So `Foo-Bar`
 	// and `foo-bar` ARE the same rule, and the collision check has to fold
@@ -709,14 +724,14 @@ func abnfNamer(reserve []string) func(string) string {
 	for _, n := range sorted {
 		if abnfLegalName.MatchString(n) && !isTaken(n) {
 			claim(n)
-			cache[n] = n
+			ruleCache[n] = n
 		}
 	}
 
-	return func(name string) string {
-		if hit, ok := cache[name]; ok {
-			return hit
-		}
+	// allocate sanitises to a legal rulename, then makes it unique against
+	// everything claimed so far — reserved rule names and previously
+	// allocated names alike, since `taken` is shared by both namespaces.
+	allocate := func(name string) string {
 		out := abnfIllegalChars.ReplaceAllString(name, "-")
 		if !abnfLeadingAlpha.MatchString(out) {
 			out = "r" + out
@@ -729,9 +744,21 @@ func abnfNamer(reserve []string) func(string) string {
 			out = out + "-" + strconv.Itoa(n)
 		}
 		claim(out)
+		return out
+	}
+
+	memo := func(cache map[string]string, name string) string {
+		if hit, ok := cache[name]; ok {
+			return hit
+		}
+		out := allocate(name)
 		cache[name] = out
 		return out
 	}
+
+	ruleName = func(name string) string { return memo(ruleCache, name) }
+	tokenName = func(bare string) string { return memo(tokenCache, bare) }
+	return ruleName, tokenName
 }
 
 // emitAbnf renders an ABNF representation of the instance's *live*
@@ -764,7 +791,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 	for rn := range rsm {
 		ruleNamesAll = append(ruleNamesAll, rn)
 	}
-	abnfName := abnfNamer(ruleNamesAll)
+	abnfRuleName, abnfTokenName := abnfNamer(ruleNamesAll)
 
 	// bnf wraps grammars in a synthetic '__start__' rule (open .P -> the
 	// real start, close matches #ZZ); skip it and lead with the real
@@ -886,7 +913,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 				if tin == endTin {
 					continue
 				}
-				inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed, abnfName))
+				inner = append(inner, emitAbnfTerminal(j, cfg, fixedSrc, rsm, tin, recordUsed, abnfRuleName, abnfTokenName))
 			}
 			switch len(inner) {
 			case 0:
@@ -1019,7 +1046,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 	// the ABNF construct it encodes.
 	inlineRef = func(name string, seen map[string]bool) string {
 		if !isFoldable(name) {
-			return abnfName(name)
+			return abnfRuleName(name)
 		}
 		if seen[name] {
 			return "" // foldable loop-back — terminates the loop
@@ -1031,7 +1058,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 		s2[name] = true
 		rs := rsm[name]
 		if rs == nil {
-			return abnfName(name)
+			return abnfRuleName(name)
 		}
 		if strings.Contains(name, "_opt") {
 			return "[ " + ruleSeq(rs, s2) + " ]"
@@ -1072,7 +1099,7 @@ func emitAbnf(j *tabnas.Tabnas) string {
 	var lines []string
 	for _, rn := range ordered {
 		body := emitBody(rsm[rn], map[string]bool{rn: true})
-		lines = append(lines, abnfName(rn)+" = "+body)
+		lines = append(lines, abnfRuleName(rn)+" = "+body)
 	}
 
 	// Define each used token as its own ABNF rule, with `=` aligned for
@@ -1119,13 +1146,14 @@ func emitAbnfTerminal(
 	rsm map[string]*tabnas.RuleSpec,
 	tin tabnas.Tin,
 	recordUsed func(name, form string),
-	abnfName func(string) string,
+	abnfRuleName func(string) string,
+	abnfTokenName func(string) string,
 ) string {
 	fullName := j.TinName(tin)
 
 	if fullName != "" {
 		if _, ok := rsm[fullName]; ok {
-			return abnfName(fullName)
+			return abnfRuleName(fullName)
 		}
 	}
 
@@ -1133,9 +1161,15 @@ func emitAbnfTerminal(
 	if name == "" {
 		name = fmt.Sprintf("T%d", tin)
 	}
-	// Strip the '#' sigil first so '#NR' reserves 'NR' rather than being
+	// Strip the '#' sigil first so '#NR' asks for 'NR' rather than being
 	// sanitised to '-NR' and then prefixed.
-	name = abnfName(strings.TrimPrefix(name, "#"))
+	//
+	// This goes through the TOKEN namespace. A rule may already hold this
+	// spelling — a grammar with a rule `NR` and the `#NR` number token is
+	// perfectly ordinary — and the token must not borrow it: that emitted a
+	// self-referential `NR = NR` plus a duplicate definition. Asking the
+	// token namespace suffixes to `NR-2` instead, keeping both distinct.
+	name = abnfTokenName(strings.TrimPrefix(name, "#"))
 	recordUsed(name, abnfTokenForm(cfg, fixedSrc, tin, fullName))
 	return name
 }
@@ -1197,9 +1231,9 @@ func abnfTokenForm(cfg *tabnas.LexConfig, fixedSrc map[tabnas.Tin]string, tin ta
 		"ZZ": "end-of-source",
 	}
 	if d, ok := desc[bare]; ok {
-		return "<" + d + ">"
+		return proseVal(d)
 	}
-	return "<built-in " + bare + ">"
+	return proseVal("built-in " + bare)
 }
 
 // regexToAbnf translates the anchored regexp the engine installs for a
@@ -1240,8 +1274,39 @@ func regexToAbnf(re *regexp.Regexp) string {
 		}
 	}
 
-	// Anything else: keep it visible but mark it as non-round-tripping.
-	return "; /" + re.String() + "/"
+	// Anything else: no ABNF construct expresses this regex, so say so in
+	// the one the grammar provides for exactly that — RFC 5234 §4
+	// prose-val, "a last resort" for describing a rule in prose. It does
+	// not round-trip, and is not meant to; it is a legal element naming
+	// what the token matches.
+	//
+	// This returned `"; /" + src + "/"` before: a bare comment. `;` runs to
+	// end of line, so the legend entry it produced (`T = ; /…/`) held no
+	// elements at all — not merely non-round-tripping but unparseable, and
+	// one such token made the WHOLE emitted grammar invalid rather than
+	// just that rule.
+	return proseVal("regex /" + re.String() + "/")
+}
+
+// proseVal renders text as an RFC 5234 §4 prose-val:
+// `prose-val = "<" *(%x20-3D / %x3F-7E) ">"`. A `>` would close the value
+// early and anything outside printable ASCII is not permitted, so both are
+// escaped rather than dropped — the text is here to say what the token
+// matches, and silently losing characters from it would defeat that.
+//
+// Mirrors the TS proseVal().
+func proseVal(text string) string {
+	var b strings.Builder
+	b.WriteByte('<')
+	for _, r := range text {
+		if (r >= 0x20 && r <= 0x3d) || (r >= 0x3f && r <= 0x7e) {
+			b.WriteRune(r)
+		} else {
+			b.WriteString(fmt.Sprintf("\\u%04X", r))
+		}
+	}
+	b.WriteByte('>')
+	return b.String()
 }
 
 // charRangeRe matches a single char-class range in the two escape forms a

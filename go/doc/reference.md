@@ -180,7 +180,7 @@ Token legend forms:
 | Case-insensitive literal | `"<lit>"` |
 | Char-range match | `%xLO-HI` |
 | Built-in lexer token | `<number>`, `<string>`, `<text>`, … |
-| Anything else | `; /<regex>/` (an ABNF comment) |
+| Anything else | `<regex /<regex>/>` (an RFC 5234 prose-val) |
 
 Like `Describe`, `Abnf` returns `(string, error)` to uphold the no-panic
 guarantee. The emitter reads only the running engine; Go has no ABNF

@@ -123,7 +123,10 @@ Several encodings exist precisely to make that round-trip hold:
   `RX___U0030__U0039`, so each is sanitised once (`_gen1_star_term` →
   `r-gen1-star-term`) and the same result is used for the production and
   every reference to it. Names that are already legal keep their
-  spelling; a collision after sanitising takes a numeric suffix.
+  spelling; a collision after sanitising takes a numeric suffix. Rules and
+  tokens are named in separate namespaces, so a grammar with a rule `NR`
+  and the built-in `#NR` token emits `NR = NR-2` with the token defined as
+  `NR-2`, rather than one name standing for both.
 
 Both of those are about the output being usable *outside* this project.
 Re-compiling with `@tabnas/abnf` is not evidence of validity; it is
@@ -137,9 +140,10 @@ alternatives are worse: `%x48.69` is unreadable, and a bare char-val would
 silently lose the case-sensitivity.
 
 Constructs ABNF cannot express (an arbitrary match regex) are emitted as
-ABNF comments (`; /.../`) rather than dropped. The output stays valid
-ABNF text and self-documents what was lost, but such a grammar does not
-round-trip.
+an RFC 5234 prose-val (`<regex /.../>`) rather than dropped. A prose-val
+is the last resort the grammar itself provides for describing a rule in
+prose, so the output still parses and self-documents what was lost,
+but such a grammar does not round-trip.
 
 ## Design trade-offs
 
