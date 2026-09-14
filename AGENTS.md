@@ -574,14 +574,22 @@ shared workflow, so read it there rather than assuming it here.
 
 `.github/workflows/release.yml` handles publishing.
 
-**The Rust suite is not wired into CI yet.** Whether the shared workflow
-grows a Rust job is a decision for `tabnas/.github`, and session
-credentials cannot write `.github/workflows/*` anyway — so `rs/` is
-currently proved locally by `make test-rs`, and cargo needs the sibling
-`../parser` checkout the workflow already clones. Ask a maintainer to
-promote the Rust job once the shared workflow supports it. Until then,
-run `make test-rs` before pushing a change that touches `rs/`,
-`ts/src/debug.ts` or `test/spec/`.
+**The Rust suite is not wired into CI yet, and the workflow that would
+do it is staged.** `ci.yml` calls the shared polyglot workflow, which
+takes no Rust input, and session credentials cannot write
+`.github/workflows/*` anyway (admin DECISIONS.md ADR-8). So `rs/` is
+proved locally, and nothing checks it remotely.
+
+`ci/workflows/rust.yml` is the standalone gate, waiting for a maintainer
+to promote it — it needs no change in `tabnas/.github`. Its commands
+live in `ci/rust/run.sh`, which you can run yourself and which is
+stricter than `make test-rs`: it adds `cargo fmt --all --check` and a
+build, and it clones nothing, so the sibling `../parser` checkout has to
+be there already.
+
+Until it is promoted, run `make test-rs` — or `ci/rust/run.sh` for what
+CI would say — before pushing a change that touches `rs/`,
+`ts/src/debug.ts`, `ts/package.json` or `test/spec/`.
 
 ## Tests mirror each other
 
