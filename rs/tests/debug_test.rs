@@ -12,7 +12,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::fixture;
-use tabnas::{Plugin, Tabnas};
+use tabnas::{AltSpec, Plugin, Tabnas};
 use tabnas_debug::{
     abnf, apply, describe, model, plugin, use_plugin, DebugOptions, TraceKinds, SECTIONS,
     TRACE_BANNER, VERSION,
@@ -26,6 +26,38 @@ fn capture(parser: &mut Tabnas) -> Arc<Mutex<Vec<String>>> {
         sink.lock().unwrap().push(message.to_string());
     }));
     lines
+}
+
+/// A grammar installed as a plugin, so `derive` rebuilds it on the child.
+fn derivable_parser() -> Tabnas {
+    let grammar = Plugin::new("DerivableFixture", |parser, _options| {
+        parser.options.rule.start = "top".into();
+        let number = parser
+            .options
+            .token("#NR")
+            .expect("the engine has a number token");
+        let end = parser
+            .options
+            .token("#ZZ")
+            .expect("the engine has an end token");
+        parser.define_rule("top", move |spec| {
+            spec.clear();
+            spec.add_open(AltSpec {
+                s: vec![vec![number]],
+                ..Default::default()
+            });
+            spec.add_close(AltSpec {
+                s: vec![vec![end]],
+                ..Default::default()
+            });
+        });
+        Ok(())
+    });
+    let mut parser = Tabnas::new();
+    parser
+        .use_plugin(grammar, None)
+        .expect("the derivable fixture installs");
+    parser
 }
 
 #[test]
@@ -373,15 +405,19 @@ fn reapplying_without_trace_turns_tracing_off() {
 #[test]
 fn deriving_a_child_does_not_stack_trace_subscribers() {
     // `derive` re-runs the parent's plugins against the child's options.
-    let mut parent = fixture::build("add").expect("a known grammar");
+    let mut parent = derivable_parser();
     apply(&mut parent, DebugOptions::new().with_print(false)).expect("the debug plugin installs");
 
     let mut child = parent.derive(|options| options.tag = "child".into()).ok();
     let Some(child) = child.as_mut() else {
         panic!("deriving a child must not fail");
     };
+    assert_ne!(parent.id, child.id);
+    assert_eq!(child.lex_subscribers.len(), 1);
+    assert_eq!(child.rule_subscribers.len(), 1);
+    assert_eq!(child.rule_done_subscribers.len(), 1);
     let lines = capture(child);
-    child.parse("1+2").expect("the child parses 1+2");
+    child.parse("1").expect("the child parses a number");
 
     let captured = lines.lock().unwrap().clone();
     assert_eq!(
@@ -389,6 +425,43 @@ fn deriving_a_child_does_not_stack_trace_subscribers() {
         1,
         "one banner per parse on a derived instance; got {captured:#?}"
     );
+    for prefix in ["lex ", "rule ", "stack ", "parse ", "node "] {
+        assert!(
+            captured.iter().any(|line| line.starts_with(prefix)),
+            "the derived instance keeps its {prefix:?} stream; got {captured:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_child_trace_selection_does_not_change_its_parent() {
+    let mut parent = derivable_parser();
+    let parent_lines = capture(&mut parent);
+    apply(&mut parent, DebugOptions::new().with_print(false)).expect("debug installs on parent");
+
+    let mut child = parent
+        .derive(|options| options.tag = "child".into())
+        .expect("derive a child");
+    let child_lines = capture(&mut child);
+    apply(
+        &mut child,
+        DebugOptions::new()
+            .with_print(false)
+            .with_trace(TraceKinds {
+                lex: true,
+                ..TraceKinds::none()
+            }),
+    )
+    .expect("narrow tracing on child");
+
+    parent.parse("1").expect("the parent still parses");
+    child.parse("1").expect("the child still parses");
+
+    let parent_lines = parent_lines.lock().unwrap().clone();
+    let child_lines = child_lines.lock().unwrap().clone();
+    assert!(parent_lines.iter().any(|line| line.starts_with("rule ")));
+    assert!(child_lines.iter().any(|line| line.starts_with("lex ")));
+    assert!(!child_lines.iter().any(|line| line.starts_with("rule ")));
 }
 
 // --- regressions: reporting fidelity -------------------------------------
