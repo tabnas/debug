@@ -45,6 +45,30 @@ if [[ "$WANT" != "$HAVE" ]]; then
   exit 1
 fi
 
+# That version check is the common case stated clearly; it is NOT the whole
+# check. A pull request that adds, removes or re-pins a DEPENDENCY leaves
+# the crate's own version alone, so it sails past the comparison above while
+# leaving the committed lock stale -- cargo then regenerates it in the
+# runner and everything goes green. Verified: adding a dependency without
+# regenerating took the lock from 20 packages to 21 mid-run, exit 0.
+#
+# So the whole resolution is compared, before and after cargo runs, with one
+# exemption: the engine's recorded version. That entry legitimately moves
+# whenever the sibling checkout does, and exempting exactly it is what makes
+# a full comparison usable here when blanket `--locked` is not.
+lock_without_engine_version() {
+  awk '
+    /^\[\[package\]\]$/  { eng = 0 }
+    /^name = "tabnas"$/  { eng = 1 }
+    eng && /^version = / { print "version = \"<engine>\""; next }
+                         { print }
+  ' "$1"
+}
+
+LOCK_BEFORE=$(mktemp)
+cp Cargo.lock "$LOCK_BEFORE"
+trap 'rm -f "$LOCK_BEFORE"' EXIT
+
 # NOT `--locked`, deliberately, and this is the one place the plugin gate
 # differs from the engine's own (parser ci/rust/run.sh does pass it).
 #
@@ -69,3 +93,16 @@ cargo fmt --check
 cargo build --all-targets
 cargo test --all-targets
 cargo clippy --all-targets --all-features -- -D warnings
+
+# Now that cargo has had every chance to rewrite it, the lock must still
+# describe the same resolution it did when committed.
+if ! diff -q <(lock_without_engine_version "$LOCK_BEFORE") \
+             <(lock_without_engine_version Cargo.lock) >/dev/null; then
+  echo "rs/Cargo.lock does not match rs/Cargo.toml -- cargo rewrote it:" >&2
+  diff <(lock_without_engine_version "$LOCK_BEFORE") \
+       <(lock_without_engine_version Cargo.lock) >&2 || true
+  echo >&2
+  echo "run a cargo command and commit the updated rs/Cargo.lock" >&2
+  cp "$LOCK_BEFORE" Cargo.lock   # leave the tree as it was found
+  exit 1
+fi

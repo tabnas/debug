@@ -583,7 +583,7 @@ proved locally, and nothing checks it remotely.
 `ci/workflows/rust.yml` is the standalone gate, waiting for a maintainer
 to promote it — it needs no change in `tabnas/.github`. Its commands
 live in `ci/rust/run.sh`, which you can run yourself and which is
-stricter than `make test-rs`: it adds `cargo fmt --all --check` and a
+stricter than `make test-rs`: it adds `cargo fmt --check` and a
 build, and it clones nothing, so the sibling `../parser` checkout has to
 be there already.
 
