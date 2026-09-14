@@ -341,11 +341,13 @@ The steps, in order:
    usually does not, so reproduce that before believing anything:
 
    ```bash
-   cd ts
-   rm -f package-lock.json      # gitignored here; pins the old versions
-   rm -rf node_modules
-   npm install
-   npm test
+   (
+     cd ts
+     rm -f package-lock.json      # gitignored here; pins the old versions
+     rm -rf node_modules
+     npm install
+     npm test
+   )
    ```
 
    **Removing the lockfile is not enough on its own.** It does not touch
@@ -371,9 +373,11 @@ The steps, in order:
    the sibling directory. Assert its absence first:
 
    ```bash
-   cd go
-   go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod has a replace'; exit 1; }
-   GOWORK=off go test -count=1 ./...
+   (
+     cd go
+     go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod has a replace'; exit 1; }
+     GOWORK=off go test -count=1 ./...
+   )
    ```
 
    `-count=1` because shared fixtures live outside the Go module, so a
@@ -391,19 +395,78 @@ The steps, in order:
    module tag is worse: proxy.golang.org caches module versions permanently,
    so a `go/vX.Y.Z` naming the wrong commit cannot be moved, only
    superseded.
-5. Dispatch `release.yml` on `main` with `go: true`.
+5. **Record the release commit, then dispatch.** The confirmation
+   below compares each tag against the commit you released, and a run
+   that publishes and then fails to tag can be followed by `main`
+   moving — so capture it *before* the dispatch, and read it from the
+   remote rather than a local ref that may be stale:
+
+   ```bash
+   REL=$(git ls-remote origin refs/heads/main | cut -f1)
+   ```
+
+   Then dispatch `release.yml` on `main` with `go: true`.
+
+   Keep that SHA. If a later run has to repair this release, the comparison
+   must still be against the commit npm actually served — re-reading `main`
+   at repair time gives you whatever it has become, which is exactly the
+   value the faulty anchor would also produce, so the check would agree with
+   itself and pass. If you no longer have it, recover it from the original
+   run: the `head_sha` of that `release.yml` run is the commit it published.
 6. Confirm — and make the check **fail**, not merely print:
 
    ```bash
    V=x.y.z
    npm view @tabnas/debug@$V version
-   n=$(git ls-remote --tags origin "refs/tags/ts/v$V" "refs/tags/go/v$V" | wc -l)
-   [ "$n" = 2 ] || { echo "incomplete release: $n/2 tags"; exit 1; }
+   GH=$(npm view @tabnas/debug@$V gitHead)
+   [ -n "$GH" ] || { echo "npm records no gitHead for $V"; exit 1; }
+   for T in "ts/v$V" "go/v$V"; do
+     S=$(git ls-remote origin "refs/tags/$T" | cut -f1)
+     [ -n "$S" ] || { echo "missing tag $T"; exit 1; }
+     [ "$S" = "$GH" ] || { echo "$T is $S, but npm shipped $GH"; exit 1; }
+   done
+   [ "$GH" = "$REL" ] || { echo "shipped $GH, not the $REL you cleared"; exit 1; }
    ```
 
-   Neither `… | grep v$V` nor a bare `wc -l` is a check: `grep` exits 0 when
-   *either* ref matches, and `wc` prints the count and exits 0 regardless.
-   Both report a half-finished release as a finished one.
+   Counting the refs is not enough either. `grep v$V` exits 0 when *either*
+   ref matches; a bare `wc -l` prints the count and exits 0 regardless; and
+   even `[ "$n" = 2 ]` passes in the case this section warns about, because an
+   anchor fallback writes *both* tags on a commit npm never served — and two
+   wrong tags count as two. Comparing each tag against the commit you
+   released is what catches that.
+
+   The refs carry the commit directly: `release.yml` creates them with
+   `git tag "$T" "$ANCHOR"`, so they are lightweight and there is no `^{}`
+   to peel.
+
+   `$REL` is deliberately not what the tags are measured against. It is
+   your record of what you meant to release, and a repair can make the
+   tags agree with it while npm serves something else: publish from A,
+   lose the atomic tag push, re-capture `main` at B, and the repair tags
+   B — so a `$REL`-only loop passes while the registry still serves A.
+   `gitHead` is npm's own record of the commit the tarball was built from,
+   so that is what the tags are checked against, and `$REL` is checked
+   separately, as the CI question it actually is.
+
+   When the script exits nonzero, the line that failed says what to do. A
+   tag that is not `$GH` is wrong, and the two are not equally
+   recoverable. A wrong `ts/v$V` simply moves: npm resolves from the
+   registry, so the tag is a signpost and nothing reads it. A wrong
+   `go/v$V` does not. `proxy.golang.org` caches a module version's content
+   immutably, so once anything has fetched `v$V` that content is what
+   consumers get for good, and a corrected tag only makes Git and the
+   proxy disagree — and you cannot find out whether it has been fetched
+   without causing it, because asking the proxy is itself a fetch. Leave
+   that tag where it is and release the next patch from the right commit,
+   carrying `retract v$V` in its `go/go.mod`: the cached content stays,
+   but `go get` stops selecting the bad version and reports it as
+   retracted.
+
+   The last line is a different failure. The tags are honest and `$REL` is
+   the stale capture — `main` moved before the run checked out — but what
+   shipped is then a commit you never cleared CI on, and `release.yml`
+   runs no tests of its own. Confirm `$GH` is green on `main` before
+   calling the release good.
 
 ### When a dispatch dies half-way
 

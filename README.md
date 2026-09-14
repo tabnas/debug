@@ -12,7 +12,7 @@ Debug / introspection plugin for the
 *visible*: `model()` returns a structured description of an engine's
 installed grammar (rules, tokens, plugins), `describe()` renders it as
 text, `abnf()` re-expresses it as ABNF, and `trace` logs a parse step by
-step. A dev/test aid for authoring and inspecting grammars — **never a
+step. A dev/test aid for authoring and inspecting grammars, and **never a
 runtime dependency**.
 
 Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
@@ -37,9 +37,9 @@ typeof tn.debug.describe()  // => 'string'
 | [`rs/`](rs/) | Rust (the `tabnas-debug` crate, library `tabnas_debug`). Tracks `ts/`. |
 
 The TypeScript implementation is the source of truth; the Go and Rust
-ports mirror its behaviour — including the structured model, the granular
-trace kinds, and the `print` option (as `tabnasdebug.Use` /
-`tabnas_debug::use_plugin`) — as far as each engine API allows. The
+ports mirror its behaviour (including the structured model, the granular
+trace kinds, and the `print` option, as `tabnasdebug.Use` and
+`tabnas_debug::use_plugin`) as far as each engine API allows. The
 remaining shape differences are documented in
 [`docs/reference.md`](docs/reference.md), the authoritative divergence
 register.
@@ -63,9 +63,9 @@ All three implementations consume the
 [`tabnas`](https://github.com/tabnas/parser) parser engine. The Go module
 resolves it at a pinned published version; the TypeScript package and the
 Rust crate resolve it from a sibling `../parser` checkout, so clone that
-first — and build its TypeScript
-(`cd parser/ts && npm install && npm run build`), which the Rust crate
-does not need (cargo compiles the engine from source).
+first and build its TypeScript
+(`cd parser/ts && npm install && npm run build`). The Rust crate does not
+need that build: cargo compiles the engine from source.
 
 ```bash
 make build   # build all three implementations

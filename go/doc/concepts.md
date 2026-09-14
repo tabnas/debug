@@ -8,12 +8,12 @@ port and ends with the differences from the canonical TypeScript version.
 ## What the package is for
 
 `tabnasdebug` is an introspection package. It does not change how a
-grammar parses — it makes a grammar *visible*: the tokens and rules an
+grammar parses: it makes a grammar *visible*, showing the tokens and rules an
 instance has, how the rules connect, what each alternate matches, the
 grammar as ABNF, and a step-by-step trace of a parse.
 
 It is a development and test aid. It is **never a runtime dependency**: a
-grammar you ship does not need it to parse — only to inspect or describe.
+grammar you ship does not need it to parse, only to inspect or describe.
 
 ## The engine relationship
 
@@ -36,7 +36,7 @@ plugin installs a token subscriber and a rule subscriber via `j.Sub`
 (driving the `lex`, and the `step` / `stack` / `rule`, streams), a
 parse-prepare hook that prints the TRACE banner, and after-open /
 after-close rule state actions that drive the `parse` and `node`
-streams — together covering all six TypeScript trace kinds. Each event
+streams, together covering all six TypeScript trace kinds. Each event
 is formatted to the configured writer.
 
 ## The no-panic guarantee
@@ -45,8 +45,8 @@ Every error-returning entry point (`Debug`, `Describe`, `Abnf`) defers a
 `recover()` that converts a panic into an `"internal"`-code
 `*tabnas.TabnasError`. This mirrors the engine's own contract: a caller of
 this package can never be crashed by it. Malformed grammar specs (a nil
-config, a nil rule spec, a nil alternate) are rendered defensively — a nil
-alternate becomes the literal `***INVALID***` — rather than dereferenced.
+config, a nil rule spec, a nil alternate) are rendered defensively (a nil
+alternate becomes the literal `***INVALID***`) rather than dereferenced.
 That is why the Go functions return `(string, error)` where the
 TypeScript methods return a bare string: Go has no exceptions, so the
 guarantee is expressed in the signature.
@@ -68,8 +68,8 @@ double-counting the input. Constructs ABNF cannot express are emitted as
 ABNF comments (`; /.../`) so the output stays valid text.
 
 Two more exist to keep the output valid *outside* this project, matching
-the TypeScript emitter. An *empty open* alternate — what makes a kept
-`*(…)` rule zero-or-more — renders by wrapping the other alternates in
+the TypeScript emitter. An *empty open* alternate (what makes a kept
+`*(…)` rule zero-or-more) renders by wrapping the other alternates in
 `[ … ]` rather than as a trailing `/`, because RFC 5234's `alternation`
 requires a concatenation after every `/`. And rule names are mapped to
 `rulename = ALPHA *(ALPHA / DIGIT / "-")`, so a synthetic `_gen1_star_T`
@@ -110,10 +110,10 @@ project's combined `docs/reference.md`.
    TypeScript kinds (`step`, `rule`, `lex`, `parse`, `node`, `stack`)
    have Go streams, but the TS engine drives them from a single `ctx.log`
    callback while the Go engine offers no such callback. The Go plugin
-   instead combines the rule subscriber (`step`, `stack`, `rule` — fired
+   instead combines the rule subscriber (`step`, `stack`, `rule`, fired
    at the same pre-step point the TS engine logs them), the lex
    subscriber (`lex`), and after-open/after-close rule state actions
-   installed at parse start (`parse`, `node` — the closest post-match
+   installed at parse start (`parse`, `node`, the closest post-match
    hook). Two shape gaps remain: `parse` lines say `alt` / `no-alt`
    without the TS alt *index* (the engine does not expose which alternate
    matched), and `lex` lines omit the matcher name.
@@ -138,6 +138,6 @@ project's combined `docs/reference.md`.
    deterministic and diffable, rather than matching TypeScript's exact
    insertion order.
 
-The `Describe` section headers are identical across both runtimes — pinned
-by the shared `test/spec/sections.tsv` fixture that both test suites run —
+The `Describe` section headers are identical across both runtimes, pinned
+by the shared `test/spec/sections.tsv` fixture that both test suites run,
 so even where the section *bodies* differ, the layout stays diffable.

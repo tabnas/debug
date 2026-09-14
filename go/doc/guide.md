@@ -32,7 +32,7 @@ The sections, in order, are `INSTANCE`, `TOKENS`, `RULES`, `ALTS`,
 ## Assert on a section
 
 `Describe` returns text, so assert on a header or a known row. (For
-structured assertions, use `Model` — see below.)
+structured assertions, use `Model`; see below.)
 
 ```go
 report, _ := tabnasdebug.Describe(j)
@@ -63,7 +63,7 @@ rules := sectionOf(report, "========= RULES =========", "========= ALTS ========
 ## Consume the grammar as data
 
 `Model` returns the same information as a typed, JSON-serialisable
-`*DebugModel` — the Go counterpart of the TypeScript `model()` — so tests
+`*DebugModel` (the Go counterpart of the TypeScript `model()`) so tests
 and tools can assert on structure instead of text:
 
 ```go
@@ -74,7 +74,7 @@ if err != nil {
 
 for _, edges := range m.Graph {
 	if edges.Name == "val" {
-		fmt.Println(edges.OpenPush) // e.g. [map list]
+		fmt.Println(edges.OpenPush) // for example [map list]
 	}
 }
 
@@ -85,7 +85,7 @@ data, _ := json.Marshal(m) // the grammar portion round-trips
 
 With `print` on (the default), load later plugins through
 `tabnasdebug.Use` and each load logs `USE: <name>` plus the full
-`Describe` dump — the Go form of the TS `use()` wrapping:
+`Describe` dump, the Go form of the TS `use()` wrapping:
 
 ```go
 j.Use(tabnasdebug.Debug, map[string]any{"print": true, "trace": false})
@@ -95,7 +95,7 @@ tabnasdebug.Use(j, myPlugin, nil) // logs USE: myPlugin + the dump
 ## Render a grammar as ABNF
 
 `Abnf` emits the live grammar as ABNF text. It reads only the running
-engine — it never imports an ABNF library — so it works on any grammar.
+engine (it never imports an ABNF library) so it works on any grammar.
 
 ```go
 out, err := tabnasdebug.Abnf(j)
@@ -127,7 +127,7 @@ if err := j.Use(tabnasdebug.Debug, map[string]any{"trace": true}); err != nil {
 j.Parse("1+2")
 ```
 
-## Capture trace output (e.g. in a test)
+## Capture trace output (for example in a test)
 
 Pass an `io.Writer` under `opts["out"]` and the trace subscribers write
 there instead of `os.Stdout`:
@@ -150,8 +150,8 @@ if !strings.Contains(out, "  lex  ") {
 }
 ```
 
-All six TypeScript trace kinds have Go streams — `step`, `rule`, `lex`,
-`parse`, `node`, `stack` — each with a matching line prefix (`  rule `,
+All six TypeScript trace kinds have Go streams (`step`, `rule`, `lex`,
+`parse`, `node`, `stack`) each with a matching line prefix (`  rule `,
 `  lex  `, …). See the [reference](reference.md) for the line formats and
 [concepts](concepts.md) for how they map onto the engine's hooks.
 
@@ -192,6 +192,6 @@ if err != nil {
 ```
 
 A malformed grammar (a nil rule spec, a nil alternate) is rendered
-defensively — a nil alternate shows as `***INVALID***` — rather than
+defensively (a nil alternate shows as `***INVALID***`) rather than
 returning an error, so `Describe` still produces a useful dump while you
 are mid-edit.

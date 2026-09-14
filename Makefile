@@ -17,7 +17,8 @@
 # parser MAIN. Both resolutions must pass; run each before pushing.
 
 .PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
-        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset
+        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset \
+        prose prose-counts
 
 all: build test
 
@@ -83,3 +84,16 @@ reset:
 	cd ts && npm run reset
 	cd go && GOWORK=off go clean -cache && GOWORK=off go build ./... && GOWORK=off go test -v ./...
 	cd rs && cargo clean && cargo build --all-targets && cargo test --all-targets
+
+# The prose gate (see docs/STYLE-GUIDE.md). Vale over the reader-facing
+# pages, at the levels set in .vale.ini, on the same file list
+# ts/test/docs.test.js reads. Requires `vale` on PATH and one
+# `vale sync`. Warnings are advisory, errors fail.
+prose:
+	vale --minAlertLevel=error $$(node ts/scripts/gated-docs.cjs)
+	node ts/scripts/vale-counts.cjs
+
+# Re-measure what .vale.ini and the style guide record, after
+# a change to the pages or to the rules moves the numbers.
+prose-counts:
+	node ts/scripts/vale-counts.cjs --write
