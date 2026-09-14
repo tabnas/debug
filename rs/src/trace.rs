@@ -135,7 +135,6 @@ pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) -> Result<
         instance_id: parser.id.clone(),
         kinds: Mutex::new(kinds),
     });
-    parser.decorate_opaque(TRACE_DECORATION, state.clone());
 
     // One banner per parse, as the canonical runtime emits it.
     let live = state.clone();
@@ -149,6 +148,11 @@ pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) -> Result<
             })),
         );
     })?;
+
+    // Publish the initialized state only after the fallible options rebuild
+    // succeeds. Otherwise a retry would mistake a partial install for a
+    // complete one and skip registering the subscribers below.
+    parser.decorate_opaque(TRACE_DECORATION, state.clone());
 
     {
         let live = state.clone();

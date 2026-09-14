@@ -9,7 +9,10 @@
 
 mod common;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use common::fixture;
 use tabnas::{AltSpec, Plugin, Tabnas};
@@ -400,6 +403,37 @@ fn reapplying_without_trace_turns_tracing_off() {
         lines.is_empty(),
         "re-applying without trace must silence everything; got {lines:#?}"
     );
+}
+
+#[test]
+fn a_failed_trace_install_can_be_retried() {
+    let should_fail = Arc::new(AtomicBool::new(false));
+    let fail = should_fail.clone();
+    let mut parser = fixture::build("add").expect("a known grammar");
+    parser.config_modifier_ref("@fail", move |_| {
+        assert!(
+            !fail.load(Ordering::SeqCst),
+            "requested configuration failure"
+        );
+    });
+    parser
+        .grammar_json(r#"{"options":{"config":{"modify":{"fail":"@fail"}}}}"#)
+        .expect("the failure modifier starts disabled");
+
+    should_fail.store(true, Ordering::SeqCst);
+    assert!(apply(&mut parser, DebugOptions::new().with_print(false)).is_err());
+
+    should_fail.store(false, Ordering::SeqCst);
+    apply(&mut parser, DebugOptions::new().with_print(false))
+        .expect("a failed trace install can be retried");
+    let lines = capture(&mut parser);
+    parser
+        .parse("1+2")
+        .expect("the retried parser still parses");
+
+    let captured = lines.lock().unwrap().clone();
+    assert!(captured.iter().any(|line| line.starts_with("lex ")));
+    assert!(captured.iter().any(|line| line.starts_with("rule ")));
 }
 
 #[test]
