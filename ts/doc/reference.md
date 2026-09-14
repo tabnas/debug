@@ -180,7 +180,7 @@ Token legend forms:
 | Case-insensitive literal | `"<lit>"` |
 | Char-range match | `%xLO-HI` |
 | Built-in lexer token | `<number>`, `<string>`, `<text>`, … |
-| Anything else | `; /<regex>/<flags>` (an ABNF comment) |
+| Anything else | `<regex /<regex>/<flags>>` (an RFC 5234 prose-val) |
 
 The emitter reads only the running engine; it never imports an ABNF
 library. See [concepts](concepts.md) for the round-trip contract.
