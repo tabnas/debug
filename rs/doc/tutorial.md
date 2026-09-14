@@ -7,7 +7,7 @@ traced parse. It is the Rust port of the
 implementation is canonical and this crate (`tabnas_debug`) tracks it.
 
 The debug plugin reports on a *running* engine, so you need a grammar to
-look at. Step 2 builds a small one by hand — the same `add` grammar the
+look at. Step 2 builds a small one by hand, the same `add` grammar the
 shared fixtures use.
 
 ## 1. Add the crates
@@ -22,7 +22,7 @@ tabnas = { path = "../parser/rs" }
 tabnas-debug = { path = "../debug/rs" }
 ```
 
-Nothing needs building first — cargo compiles the engine from source.
+Nothing needs building first: cargo compiles the engine from source.
 
 ## 2. Build a small grammar by hand
 
@@ -62,7 +62,7 @@ fn add_grammar() -> Tabnas {
 
 ## 3. Read the description
 
-`describe` is a free function — it takes the instance, and needs no
+`describe` is a free function: it takes the instance, and needs no
 plugin installed:
 
 ```rust
@@ -104,7 +104,7 @@ let val = built.graph.iter().find(|edges| "val" == edges.name).unwrap();
 assert_eq!(val.open_push, ["add"]);
 ```
 
-Note `model.config.start`, **not** `model.start` — the start rule lives
+Note `model.config.start`, **not** `model.start`. The start rule lives
 under `config`, as it does in every runtime.
 
 ## 5. Render the grammar as ABNF
@@ -123,7 +123,7 @@ NR = <number>
 PL = "+"
 ```
 
-The emitter reads only the live engine — it never depends on an ABNF
+The emitter reads only the live engine: it never depends on an ABNF
 compiler. Tokens become named terminals defined in a legend after the
 productions; a built-in lexer token renders as `<number>` (a description,
 not a re-compilable rule), while a fixed literal renders as `"+"` or, for
@@ -144,7 +144,7 @@ parser.parse("1+2")?;
 ```
 
 Each parse opens with a `========= TRACE ==========` banner, then one
-line per event. Output goes to the engine's debug sink — stderr by
+line per event. Output goes to the engine's debug sink, stderr by
 default. To capture it instead:
 
 ```rust

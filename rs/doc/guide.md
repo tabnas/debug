@@ -11,7 +11,7 @@ use tabnas_debug::{abnf, apply, describe, model, use_plugin, DebugOptions, Trace
 
 ## Dump a grammar description
 
-`describe` needs no plugin — it reads the instance:
+`describe` needs no plugin: it reads the instance:
 
 ```rust
 println!("{}", describe(&parser));
@@ -64,7 +64,7 @@ assert!(json["tokenSets"].is_array());
 # Ok::<(), serde_json::Error>(())
 ```
 
-Absent optionals are skipped rather than written as `null`, so an alt
+Absent optional fields are skipped rather than written as `null`, so an alt
 with no `push` has no `push` key at all.
 
 ## Render a grammar as ABNF
@@ -79,7 +79,7 @@ named terminal defined in a legend after the productions.
 
 ## Log a description on later plugin loads (the print option)
 
-`Tabnas::use_plugin` is a concrete method, not a reassignable field, so
+`Tabnas::use_plugin` is a concrete method, not a field you can reassign, so
 the TypeScript `use()` wrapping is a free function here:
 
 ```rust
@@ -100,9 +100,9 @@ parser.parse("1+2")?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Output goes to the engine's debug sink — stderr by default.
+Output goes to the engine's debug sink, stderr by default.
 
-## Capture trace output (e.g. in a test)
+## Capture trace output (for example, in a test)
 
 There is no `out` option: the sink belongs to the engine, and both trace
 lines and the `USE:` dump go through it.
@@ -138,7 +138,7 @@ apply(
 ```
 
 `TraceKinds::none()` starts from everything off, `TraceKinds::all()` from
-everything on — so a partial selection is explicit either way, rather
+everything on, so a partial selection is explicit either way, rather
 than depending on a merge rule.
 
 Note that `step` has no Rust engine hook and logs nothing; selecting it
@@ -158,6 +158,6 @@ plugin (so `model().plugins` reports it) without writing anything.
 
 ## Skip the plugin entirely
 
-If you only want introspection, do not install anything —
+If you only want introspection, do not install anything:
 `describe(&parser)`, `model(&parser)` and `abnf(&parser)` work on a bare
 instance. That is why the shared fixture grammars do not load the plugin.

@@ -27,8 +27,8 @@ use tabnas_debug::{
 | `describe(parser)` | `fn(&Tabnas) -> String` |
 | `model(parser)` | `fn(&Tabnas) -> DebugModel` |
 | `abnf(parser)` | `fn(&Tabnas) -> String` |
-| `SECTIONS` | `[&str; 8]` — the `describe` banners, in order |
-| `TRACE_BANNER` | `&str` — written once per traced parse |
+| `SECTIONS` | `[&str; 8]`, the `describe` banners, in order |
+| `TRACE_BANNER` | `&str`, written once per traced parse |
 | `VERSION` | `&str` |
 
 `describe`, `model` and `abnf` are **free functions and infallible**:
@@ -57,15 +57,15 @@ both trace lines and the `USE:` dump through it.
 
 ## `TraceKinds`
 
-A struct of six `bool` fields — `step`, `rule`, `lex`, `parse`, `node`,
-`stack` — with `TraceKinds::all()` and `TraceKinds::none()`
+A struct of six `bool` fields (`step`, `rule`, `lex`, `parse`, `node`,
+`stack`) with `TraceKinds::all()` and `TraceKinds::none()`
 constructors, so a partial selection is explicit rather than depending on
 a merge rule.
 
 **`step` never fires.** The Rust engine has no `ctx.log` and emits no
 per-step event. The kind is kept so the names stay in step across
 runtimes; selecting it is accepted and logs nothing, and selecting it
-ALONE installs no tracing at all — not even the per-parse banner.
+ALONE installs no tracing at all, not even the per-parse banner.
 
 ## `describe(parser) -> String`
 
@@ -77,7 +77,7 @@ Eight sections, in this order, with these exact banners:
 | `========= TOKENS ========` | Each token: tin, name, and fixed source text when it has one; then a token-set sub-block. |
 | `========= RULES =========` | Each rule's push/replace transition tree: open-push (`op`), open-replace (`or`), close-push (`cp`), close-replace (`cr`). Empty categories are omitted. |
 | `========= ALTS =========` | Each rule's open and close alternates: token sequence, `r=`/`p=` targets, `b=`, `n=`, the `A`/`C`/`H` presence flags, declarative conditions (`CD=`), and `g=`. |
-| `========= LEXER =========` | Custom lexer matchers only — the built-in enable flags are under `CONFIG`. |
+| `========= LEXER =========` | Custom lexer matchers only. The built-in enable flags are under `CONFIG`. |
 | `========= CONFIG ========` | `start`, `finish`, `safeKey`, and the eight `lex.*` enable flags. |
 | `========= PLUGIN =========` | Each plugin by its declared name, plus its options when the instance holds a bag for it. |
 | `========= ABNF =========` | The output of `abnf`. |
@@ -102,8 +102,8 @@ pub struct DebugModel {
 ```
 
 Every type derives `serde::Serialize`, with names chosen to match the
-TypeScript field names and the Go JSON tags exactly — `tokenSets`,
-`openPush`, `openReplace`, `closePush`, `closeReplace`, `safeKey` — which
+TypeScript field names and the Go JSON tags exactly (`tokenSets`,
+`openPush`, `openReplace`, `closePush`, `closeReplace`, `safeKey`), which
 is what makes `../../test/spec/model.tsv` shareable across runtimes.
 
 | Type | Fields |
@@ -114,11 +114,11 @@ is what makes `../../test/spec/model.tsv` shareable across runtimes.
 | `DebugAltInfo` | `seq`, `push`, `replace`, `back`, `counters` (all skipped when absent), `groups`, `action`, `cond`, `modifier` |
 | `DebugRuleInfo` | `name`, `open`, `close` |
 | `DebugRuleEdges` | `name`, `openPush`, `openReplace`, `closePush`, `closeReplace` |
-| `DebugLexMatcher` | `order` (`f64` — priorities are not necessarily whole), `matcher`, `make` (always `""` — Rust function values carry no name) |
+| `DebugLexMatcher` | `order` (`f64`, since priorities are not necessarily whole), `matcher`, `make` (always `""`, because Rust function values carry no name) |
 | `DebugConfigInfo` | `start`, `finish`, `safeKey`, `lex` (the eight flags, in canonical order) |
 | `DebugPluginInfo` | `name`, `options` (skipped when absent) |
 
-The start rule is `model.config.start`, **not** `model.start` — as in
+The start rule is `model.config.start`, **not** `model.start`, as in
 every runtime.
 
 A function-valued push/replace target is `"<fn>"`. `back` omits an
@@ -128,7 +128,7 @@ are not nullable (the same reason Go's do).
 ## `abnf(parser) -> String`
 
 A re-compilable ABNF rendering of the live grammar, read from the engine
-alone — never from an ABNF compiler.
+alone, never from an ABNF compiler.
 
 Rules become productions in start-rule-first order, open alternates
 become `/`-separated alternatives, and tokens become named terminals
@@ -149,15 +149,15 @@ PL = "+"
 | fixed literal a char-val cannot hold | `%x0D.0A` |
 | match regex, single char range | `%x30-39` |
 | match regex, case-insensitive literal | `"foo"` |
-| any other match regex | `; /…/` (an ABNF comment — see the caveat below) |
-| function-backed match token | `<built-in NAME>` — no ABNF form exists, so it falls through to the description, as the canonical runtime does |
+| any other match regex | `; /…/` (an ABNF comment; see the caveat below) |
+| function-backed match token | `<built-in NAME>`. No ABNF form exists, so it falls through to the description, as the canonical runtime does |
 | built-in lexer token | `<number>`, `<string>`, `<text>`, … |
 
 **Caveat, shared with the canonical runtime:** an unrecognised match regex
 emits a legend entry that is *only* a comment (`T = ; /…/`). Since `;`
 runs to end of line, that leaves a rule with no elements, which is invalid
 ABNF rather than merely non-round-tripping. This port reproduces the
-canonical behaviour deliberately — see
+canonical behaviour deliberately. See
 [`../../docs/reference.md`](../../docs/reference.md) § "Known limitations
 inherited from the canonical runtime".
 
@@ -167,13 +167,13 @@ An instance with no rules emits the empty string.
 
 Installs `plugin`, then dumps `USE: <name>` plus `describe` when the
 debug plugin was installed with `print` on. `Tabnas::use_plugin` is a
-concrete method rather than a reassignable field, so this wrapping is a
+concrete method rather than a field you can reassign, so this wrapping is a
 free function (as it is in Go). A plugin installed directly through
 `Tabnas::use_plugin` does not trigger the dump, and a failing plugin's
 error propagates unchanged.
 
 The plugin records its `print` setting as an instance decoration
-(`debug.print`), which is how the wrapper knows what to do — so calling
+(`debug.print`), which is how the wrapper knows what to do, so calling
 `use_plugin` on an instance with no debug plugin is simply silent, not an
 error.
 
@@ -199,7 +199,7 @@ engine accumulates subscribers and parse-prepare hooks, so a second
 install would otherwise double every banner and every event, and a
 narrower selection could not switch the first set off. The callbacks are
 registered exactly once per instance and read a shared selection that
-later installs replace — including with `trace: None`, which turns
+later installs replace, including with `trace: None`, which turns
 tracing off. This matters because `Tabnas::derive` re-runs a parent's
 plugins on the child.
 

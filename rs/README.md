@@ -7,13 +7,13 @@ Debug / introspection plugin for the
 It makes a grammar *visible*: `describe` dumps an instance's installed
 grammar (tokens, rules, plugins) as labelled text, `model` returns the
 same information as structured, serialisable data, `abnf` re-expresses it
-as ABNF, and tracing logs a parse event by event. A dev/test aid — never
+as ABNF, and tracing logs a parse event by event. A dev/test aid, never
 a runtime dependency.
 
 This is the Rust port of the canonical TypeScript implementation in
 [`../ts`](../ts); the TypeScript version is authoritative and this crate
 tracks it. The Rust engine exposes tracing and introspection through
-different idioms, so the surface differs in shape — free functions
+different idioms, so the surface differs in shape: free functions
 instead of instance methods, typed options instead of an option map, and
 a `use_plugin` wrapper for the `print` option. See
 [the concepts doc](doc/concepts.md) and [reference](doc/reference.md) for
@@ -23,7 +23,7 @@ authoritative cross-runtime divergence register.
 ## Install
 
 The `tabnas` crate is not published to a registry, so the engine is
-consumed as a **sibling checkout** — the standard tabnas development
+consumed as a **sibling checkout**, the standard tabnas development
 model. Clone `https://github.com/tabnas/parser` next to this repository
 and point at it:
 
@@ -71,10 +71,10 @@ parser.options.debug.output = Some(std::sync::Arc::new(|line: &str| {
 
 ## Documentation
 
-- [Tutorial](doc/tutorial.md) — zero to a working inspection, step by step.
-- [How-to guide](doc/guide.md) — focused recipes.
-- [Reference](doc/reference.md) — the exact exports, options and output.
-- [Concepts](doc/concepts.md) — how it works and how it differs from the
+- [Tutorial](doc/tutorial.md). Zero to a working inspection, step by step.
+- [How-to guide](doc/guide.md). Focused recipes.
+- [Reference](doc/reference.md). The exact exports, options and output.
+- [Concepts](doc/concepts.md). How it works and how it differs from the
   TypeScript version.
 
 ## Build and test
@@ -89,11 +89,11 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 Or, from the repository root, `make test-rs` runs the tests and clippy.
-There is only one resolution here — always the sibling engine — unlike
+There is only one resolution here, always the sibling engine, unlike
 the Go module's pinned/workspace pair.
 
-The suite runs the shared `../test/spec/*.tsv` conformance fixtures — the
-same files the TypeScript and Go suites run — over the same named
+The suite runs the shared `../test/spec/*.tsv` conformance fixtures (the
+same files the TypeScript and Go suites run) over the same named
 grammars. A row green in one runtime and red in another is a failure, not
 a discrepancy.
 
