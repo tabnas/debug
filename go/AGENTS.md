@@ -2,8 +2,11 @@
 
 This is the Go port of `@tabnas/debug`. It is **not** canonical: it
 tracks the TypeScript implementation in `../ts`, which is the source of
-truth. See [../AGENTS.md](../AGENTS.md) for the parity rules and the list
-of intentional TS/Go differences.
+truth. See [../AGENTS.md](../AGENTS.md) for the parity rules and
+[../docs/reference.md](../docs/reference.md) — the authoritative
+divergence register — for the intentional TS/Go/Rust differences. There
+is a Rust port too, in [`../rs`](../rs); the shared `../test/spec/*.tsv`
+fixtures are the parity contract across all three.
 
 - Source: `debug.go` (the `Debug` plugin, `Describe(j)`, `Abnf(j)`, the
   ABNF emitter, and `Defaults`), `model.go` (`Model(j)` and the nine

@@ -1,0 +1,34 @@
+[package]
+name = "tabnas-debug"
+version = "0.3.6"
+edition = "2021"
+rust-version = "1.85"
+authors = ["Richard Rodger <http://richardrodger.com>"]
+description = "Tracing and introspection plugin for the tabnas parser engine."
+license = "MIT"
+repository = "https://github.com/tabnas/debug"
+readme = "README.md"
+keywords = ["parser", "grammar", "debug", "trace", "abnf"]
+categories = ["parsing", "development-tools::debugging"]
+
+[lib]
+name = "tabnas_debug"
+path = "src/lib.rs"
+
+[dependencies]
+# The engine is consumed as a SIBLING CHECKOUT, the standard tabnas
+# development model: clone https://github.com/tabnas/parser next to this
+# repo. The `tabnas` crate is not published, so there is no registry
+# version to fall back on.
+tabnas = { path = "../../parser/rs" }
+indexmap = { version = "2.2", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+
+[dev-dependencies]
+# Tests only. The `collide` fixture declares a match token, which needs the
+# engine's own regex type; the library never names it (it reads the matcher
+# through `MatchTokenMatcher` and calls `as_str`), so this stays out of
+# `[dependencies]`. Same requirement as the engine's, so cargo unifies them
+# to one version and the types match.
+regex = "1.10"

@@ -28,18 +28,21 @@ tn.debug.model().tag        // => 'demo'
 typeof tn.debug.describe()  // => 'string'
 ```
 
-## Two implementations
+## Three implementations
 
 | Path | Description |
 |---|---|
 | [`ts/`](ts/) | TypeScript / JavaScript (`@tabnas/debug`). **Canonical.** |
 | [`go/`](go/) | Go (`github.com/tabnas/debug/go`, package `tabnasdebug`). Tracks `ts/`. |
+| [`rs/`](rs/) | Rust (the `tabnas-debug` crate, library `tabnas_debug`). Tracks `ts/`. |
 
-The TypeScript implementation is the source of truth; the Go port mirrors
-its behaviour (including the structured `Model`, the granular trace
-kinds, and the `print` option, as `tabnasdebug.Use`) as far as the Go
-engine API allows. The remaining shape differences are documented in
-[`docs/reference.md`](docs/reference.md).
+The TypeScript implementation is the source of truth; the Go and Rust
+ports mirror its behaviour (including the structured model, the granular
+trace kinds, and the `print` option, as `tabnasdebug.Use` and
+`tabnas_debug::use_plugin`) as far as each engine API allows. The
+remaining shape differences are documented in
+[`docs/reference.md`](docs/reference.md), the authoritative divergence
+register.
 
 ## Documentation
 
@@ -49,22 +52,27 @@ Four-quadrant [Diátaxis](https://diataxis.fr) docs, per language:
 |---|---|---|---|---|
 | **TypeScript** | [tutorial](ts/doc/tutorial.md) | [guide](ts/doc/guide.md) | [reference](ts/doc/reference.md) | [concepts](ts/doc/concepts.md) |
 | **Go** | [tutorial](go/doc/tutorial.md) | [guide](go/doc/guide.md) | [reference](go/doc/reference.md) | [concepts](go/doc/concepts.md) |
+| **Rust** | [tutorial](rs/doc/tutorial.md) | [guide](rs/doc/guide.md) | [reference](rs/doc/reference.md) | [concepts](rs/doc/concepts.md) |
 
 Per-language quick starts: [`ts/README.md`](ts/README.md),
-[`go/README.md`](go/README.md).
+[`go/README.md`](go/README.md), [`rs/README.md`](rs/README.md).
 
 ## Build and test
 
-Both implementations consume the
+All three implementations consume the
 [`tabnas`](https://github.com/tabnas/parser) parser engine. The Go module
-resolves it at a pinned published version; the TypeScript package
-resolves it from a sibling `../parser` checkout, so clone and build that
-first (`cd parser/ts && npm install && npm run build`).
+resolves it at a pinned published version; the TypeScript package and the
+Rust crate resolve it from a sibling `../parser` checkout, so clone that
+first and build its TypeScript
+(`cd parser/ts && npm install && npm run build`). The Rust crate does not
+need that build: cargo compiles the engine from source.
 
 ```bash
-make build   # build both implementations
-make test    # build + test both
+make build   # build all three implementations
+make test    # build + test all three
 ```
+
+Targeted: `make test-ts`, `make test-go`, `make test-rs`.
 
 Contributors and AI agents: see [`AGENTS.md`](AGENTS.md).
 

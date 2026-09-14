@@ -34,8 +34,9 @@ peer for its `--debug` flag.
 |---|---|
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/debug` package. Everything lives in `src/debug.ts` (plugin, `describe`/`model`/`abnf`, trace hooks, ABNF emitter). Depends on `@tabnas/parser` (peer + sibling `file:` devDep). |
 | [`go/`](go/) | Go port — module `github.com/tabnas/debug/go`: `debug.go` (plugin, `Describe`, `Abnf`, ABNF emitter), `model.go` (`Model` + the `Debug*` types), `trace.go` (the six trace kinds). Tracks `ts/` as far as the Go engine API allows. |
+| [`rs/`](rs/) | Rust port — the `tabnas-debug` crate: `src/lib.rs` (plugin, options, the `use_plugin` wrapper), `src/describe.rs`, `src/model.rs`, `src/abnf.rs`, `src/trace.rs`. Tracks `ts/` as far as the Rust engine API allows. Takes the engine as a **path dependency on the sibling checkout** (`../../parser/rs`). |
 | [`docs/`](docs/) | Cross-language docs by purpose: `tutorial.md`, `how-to/`, `reference.md`, `explanation.md` (see `docs/README.md`). |
-| [`test/spec/`](test/spec/) | The shared `.tsv` conformance fixtures both suites run — emitted ABNF, the `========= … ========` section headers, and the structured model's rules/graph, per named grammar. See [`test/AGENTS.md`](test/AGENTS.md). |
+| [`test/spec/`](test/spec/) | The shared `.tsv` conformance fixtures all three suites run — emitted ABNF, the `========= … ========` section headers, and the structured model's rules/graph, per named grammar. See [`test/AGENTS.md`](test/AGENTS.md). |
 | `scripts/fetch-parser.sh` | Legacy engine-fetch helper (see note below). |
 | `vendor/tabnas-parser` | Symlink to the sibling `../parser` checkout (git-ignored). |
 
@@ -45,7 +46,7 @@ grammar; its parity contract is the section headers and the
 
 ## The tabnas engine dependency
 
-The two runtimes resolve the engine **differently**, and the difference
+The runtimes resolve the engine **differently**, and the difference
 matters when you are chasing a discrepancy:
 
 - TypeScript: `@tabnas/parser` is a `peerDependencies` `">=0"` and a
@@ -61,6 +62,11 @@ matters when you are chasing a discrepancy:
   `go test` (workspace on) resolves the sibling instead. Both currently
   pass; see [`go/AGENTS.md`](go/AGENTS.md) for why that gap has bitten
   before.
+- Rust: `rs/Cargo.toml` declares `tabnas = { path = "../../parser/rs" }`.
+  The crate is not published to any registry, so there is no version to
+  fall back on and no second resolution to keep green — Rust always
+  tests against sibling `main`, like TypeScript. Nothing needs building
+  first: cargo compiles the engine from source. `rust-version` is `1.85`.
 
 Clone `https://github.com/tabnas/parser` as a sibling of this repo and
 build its TS (`cd parser/ts && npm install && npm run build`) before
@@ -99,22 +105,23 @@ so it is not a way to test against engine `main`; for that, see the
 
 1. **TypeScript is canonical.** `ts/src/debug.ts` is the source of truth
    for behaviour, option names, `DEFAULTS`, output format, and section
-   ordering. Change TS first, then update Go to match as far as the Go
-   engine API allows.
+   ordering. Change TS first, then update Go and Rust to match as far as
+   each engine API allows.
 2. The **8 section headers** pinned by `test/spec/sections.tsv` are the
-   parity contract. `describe()` (TS) and `Describe(j)` (Go) must emit them
-   byte-for-byte and in order: `INSTANCE`, `TOKENS`, `RULES`, `ALTS`,
-   `LEXER`, `CONFIG`, `PLUGIN`, `ABNF`. Both suites run that fixture, for
-   every grammar in the shared registry, so the cross-runtime diffability
-   claim holds. (Tracing adds a separate `========= TRACE ==========`
-   header.)
-3. Keep the shared semantics — option meanings, `DEFAULTS` / `Defaults`,
-   the `describe`/`abnf` output, and the `model`/`Model` shape — in
-   lockstep across runtimes, and record any new divergence in
-   `docs/reference.md`. That file is the authoritative divergence
-   register; this section only summarises it.
-4. The two engines are **not API-identical**; some divergence is real and
-   **intended**, not drift. The Go port has closed most of the gaps that
+   parity contract. `describe()` (TS), `Describe(j)` (Go) and
+   `describe(&parser)` (Rust) must emit them byte-for-byte and in order:
+   `INSTANCE`, `TOKENS`, `RULES`, `ALTS`, `LEXER`, `CONFIG`, `PLUGIN`,
+   `ABNF`. All three suites run that fixture, for every grammar in the
+   shared registry, so the cross-runtime diffability claim holds.
+   (Tracing adds a separate `========= TRACE ==========` header.) The Rust
+   port keeps them in one place, `describe::SECTIONS`.
+3. Keep the shared semantics — option meanings, `DEFAULTS` / `Defaults` /
+   `DebugOptions::default()`, the `describe`/`abnf` output, and the
+   `model`/`Model` shape — in lockstep across runtimes, and record any new
+   divergence in `docs/reference.md`. That file is the authoritative
+   divergence register; this section only summarises it.
+4. The three engines are **not API-identical**; some divergence is real
+   and **intended**, not drift. The Go port has closed most of the gaps that
    earlier revisions of this guide described as permanent — it now has
    `Model`, the `print` option, and all six trace kinds. What remains:
    - Both runtimes trace the same six kinds (`step`, `rule`, `lex`,
@@ -135,6 +142,15 @@ so it is not a way to test against engine `main`; for that, see the
      `TokenSet`, `Plugins`) expose.
    - Ordering: Go sorts rules by name and token-set members by tin, where
      TS uses insertion order.
+
+   The Rust port's own set is in `docs/reference.md` § "Parity and
+   remaining differences: Rust vs. canonical TypeScript". The two worth
+   knowing before reading `rs/`: `describe`/`model`/`abnf` are free
+   functions (Rust cannot add methods to a foreign type) and are
+   **infallible**, where Go's return `(value, error)`; and the `step`
+   trace kind never fires, because the Rust engine has no `ctx.log` and
+   emits no per-step event. Rust DOES match TypeScript's rule insertion
+   order, which Go cannot.
 
    The unset-instance-`tag` divergence that earlier revisions listed here
    is **no longer a Go-port limitation**: the engine now exports
@@ -172,12 +188,13 @@ their core suite still runs when the dev sibling isn't built.
 ## Build & test
 
 This repo has a top-level Makefile (`build`, `test`, `clean`,
-`build-ts`/`build-go`, `test-ts`/`test-go`, `publish-ts`, `publish-go`,
-`tags-go`, `reset`) driving both runtimes:
+`build-ts`/`build-go`/`build-rs`, `test-ts`/`test-go`/`test-rs`,
+`publish-ts`, `publish-go`, `tags-go`, `reset`) driving all three
+runtimes:
 
 ```bash
-make build    # build-ts (tsc) + build-go (GOWORK=off go build)
-make test     # test-ts (node --test) + test-go (GOWORK=off go test)
+make build    # build-ts (tsc) + build-go (GOWORK=off go build) + build-rs (cargo build)
+make test     # test-ts (node --test) + test-go (GOWORK=off go test) + test-rs (cargo test + clippy)
 ```
 
 TypeScript directly (in `ts/`):
@@ -192,6 +209,19 @@ Go directly (in `go/`):
 ```bash
 cd go && GOWORK=off go build ./... && GOWORK=off go test ./...
 ```
+
+Rust directly (in `rs/`):
+
+```bash
+cd rs && cargo build --all-targets
+cargo test --all-targets
+cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt
+```
+
+There is no second Rust resolution to keep green: the engine is a path
+dependency on the sibling checkout, so `cargo test` always builds against
+sibling `main`.
 
 The Makefile runs all Go commands with **`GOWORK=off`**, which pins the
 engine to the published version in `go/go.mod`. A plain `go test`
@@ -211,9 +241,17 @@ committing Go changes.
 The Go module carries a top-level `const VERSION` in `go/debug.go`;
 `make publish-go V=x.y.z` seds that const, commits, and tags
 `go/vX.Y.Z`. The TypeScript package exports a matching `VERSION` from
-`ts/src/debug.ts`. Both MUST equal `ts/package.json` "version":
-`go/version_test.go` and `ts/test/version.test.js` fail the build if
-either drifts.
+`ts/src/debug.ts`, and the Rust crate a `pub const VERSION` in
+`rs/src/lib.rs` beside `version` in `rs/Cargo.toml`. All of them MUST
+equal `ts/package.json` "version": `go/version_test.go`,
+`ts/test/version.test.js` and `rs/tests/version_test.rs` fail the build
+if any drifts.
+
+The Rust crate is **not published**. It depends on the engine by path,
+and the `tabnas` engine crate is itself unpublished, so a registry
+release is not possible until the engine ships one — hence no
+`publish-rs` target. A version bump must still touch `rs/Cargo.toml` and
+`rs/src/lib.rs`.
 
 ## Verify your work
 
@@ -221,7 +259,7 @@ The commands that prove a change is correct. Run them from the repo root;
 the Makefile pins the Go engine with `GOWORK=off`:
 
 ```bash
-make build && make test      # both runtimes — TS on the sibling engine, Go PINNED
+make build && make test      # all three — TS and Rust on the sibling engine, Go PINNED
 ```
 
 Narrower, when iterating:
@@ -230,6 +268,7 @@ Narrower, when iterating:
 (cd ts && npm run build && npm test)   # build first: the tests are plain JS but load ../dist/
 (cd go && GOWORK=off go test ./...)    # pinned engine — what make test runs
 (cd go && go test -count=1 ./...)      # workspace on: sibling ../parser/go — what CI resolves
+(cd rs && cargo test --all-targets)    # sibling engine, the only Rust resolution
 ```
 
 The last two are not interchangeable: `GOWORK=off` resolves the published
@@ -241,20 +280,24 @@ committing Go.
 
 What "correct" means here, in order of authority:
 
-1. **The shared fixtures pass in BOTH runtimes.** `test/spec/*.tsv` is the
-   parity contract — `sections.tsv` pins the 8 `describe()` section headers
-   byte-for-byte, `model.tsv` the structured model, `abnf.tsv` the emitted
-   ABNF — run by `ts/test/parity.test.js` and `go/parity_test.go`. A row
-   green in one runtime and red in the other is a failure, not a
-   discrepancy.
+1. **The shared fixtures pass in ALL THREE runtimes.** `test/spec/*.tsv`
+   is the parity contract — `sections.tsv` pins the 8 `describe()` section
+   headers byte-for-byte, `model.tsv` the structured model, `abnf.tsv` the
+   emitted ABNF — run by `ts/test/parity.test.js`, `go/parity_test.go` and
+   `rs/tests/parity_test.rs`. A row green in one runtime and red in
+   another is a failure, not a discrepancy. The three grammar registries
+   (`ts/test/fixture.js`, `go/fixture_test.go`,
+   `rs/tests/common/fixture.rs`) must stay in step: a fixture addresses a
+   grammar by NAME, so every runtime has to build the same one.
 2. **Both Go engine resolutions pass** — pinned (`GOWORK=off`) and sibling
    (workspace on). Both hold today; keep it that way.
-3. **The three version constants agree** — `ts/package.json` `"version"`,
-   `VERSION` in `ts/src/debug.ts`, and `const VERSION` in `go/debug.go`.
-   `ts/test/version.test.js` and `go/version_test.go` fail the build if
-   either drifts.
+3. **The five version constants agree** — `ts/package.json` `"version"`,
+   `VERSION` in `ts/src/debug.ts`, `const VERSION` in `go/debug.go`,
+   `version` in `rs/Cargo.toml`, and `pub const VERSION` in
+   `rs/src/lib.rs`. `ts/test/version.test.js`, `go/version_test.go` and
+   `rs/tests/version_test.rs` fail the build if any drifts.
 
-If TS and Go genuinely must differ (an engine-API limit), record it in
+If a port genuinely must differ (an engine-API limit), record it in
 `docs/reference.md` — the authoritative divergence register — rather than
 letting the ports drift silently.
 
@@ -281,9 +324,18 @@ accepts the publish. Pushing a tag by hand is the orchestrator's path
 
 The steps, in order:
 
-1. Bump all **three** version sites together — `ts/package.json`, `VERSION`
-   in `ts/src/debug.ts` and `const VERSION` in `go/debug.go`. Drift is
-   caught by `ts/test/version.test.js` and `go/version_test.go`.
+1. Bump all **five** version sites together — `ts/package.json`, `VERSION`
+   in `ts/src/debug.ts`, `const VERSION` in `go/debug.go`, `version` in
+   `rs/Cargo.toml`, and `pub const VERSION` in `rs/src/lib.rs`. Drift is
+   caught by `ts/test/version.test.js`, `go/version_test.go` and
+   `rs/tests/version_test.rs`.
+
+   The Rust crate is not itself published — it depends on the engine by
+   path and the engine crate is unpublished — but its constants are gated
+   all the same, so a bump that skips them fails `cargo test` on the very
+   commit `ci.yml` is meant to gate. There is no Rust job in `ci.yml`
+   today either (see the CI section), so nothing catches that for you
+   remotely: run `make test-rs` on the bump commit before merging it.
 2. Verify against the **published** dependencies rather than your checkout.
    The release runner installs fresh from the registry; a working tree
    usually does not, so reproduce that before believing anything:
@@ -466,8 +518,9 @@ either:
 - `publish-ts` runs a local `npm publish`, which goes out over a token and
   bypasses the OIDC trusted publishing the workflow uses.
 - `publish-go V=x.y.z` breaks the version invariant: it `sed`s and stages
-  **only** `go/debug.go`, leaving `ts/package.json` and `VERSION` in
-  `ts/src/debug.ts` on the previous version — the exact state the version
+  **only** `go/debug.go`, leaving `ts/package.json`, `VERSION` in
+  `ts/src/debug.ts`, and the two Rust sites (`rs/Cargo.toml`,
+  `rs/src/lib.rs`) on the previous version — the exact state the version
   tests exist to reject. Its `test-go` prerequisite also runs *before* the
   `sed`, so what it verifies is not what it tags.
 
@@ -476,7 +529,7 @@ They stay in the Makefile because removing them is a separate change.
 ## Error codes
 
 This package declares no error codes: there is no `error`/`hint` catalogue
-in either runtime, and no shared fixture pins an error row of any kind —
+in any runtime, and no shared fixture pins an error row of any kind —
 no `ERROR:<code>`, no rendered-message expectations, no bare `ERROR` cells.
 That is as it should be: debug is a tracing/introspection tool, not a
 grammar, so any error an instrumented parse raises comes from the engine or
@@ -521,11 +574,21 @@ shared workflow, so read it there rather than assuming it here.
 
 `.github/workflows/release.yml` handles publishing.
 
+**The Rust suite is not wired into CI yet.** Whether the shared workflow
+grows a Rust job is a decision for `tabnas/.github`, and session
+credentials cannot write `.github/workflows/*` anyway — so `rs/` is
+currently proved locally by `make test-rs`, and cargo needs the sibling
+`../parser` checkout the workflow already clones. Ask a maintainer to
+promote the Rust job once the shared workflow supports it. Until then,
+run `make test-rs` before pushing a change that touches `rs/`,
+`ts/src/debug.ts` or `test/spec/`.
+
 ## Tests mirror each other
 
-`ts/test/debug.test.js` ↔ `go/debug_test.go` + `go/model_test.go`; keep
-them aligned. Both sides also run the shared fixtures through
-`ts/test/parity.test.js` ↔ `go/parity_test.go`.
+`ts/test/debug.test.js` ↔ `go/debug_test.go` + `go/model_test.go` ↔
+`rs/tests/debug_test.rs`; keep them aligned. All three sides also run the
+shared fixtures through `ts/test/parity.test.js` ↔ `go/parity_test.go` ↔
+`rs/tests/parity_test.rs`.
 
 TS-only: `ts/test/abnf.test.js` (the `abnf()` ↔ `@tabnas/abnf`
 round-trip — the emitter must never gain `@tabnas/abnf` as a runtime
