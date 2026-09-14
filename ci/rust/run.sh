@@ -20,6 +20,31 @@ fi
 
 cd "$ROOT/rs"
 
+# Assert the lock's entry for THIS crate still matches the manifest,
+# BEFORE anything runs cargo. Without `--locked` (see below) a cargo
+# command silently rewrites Cargo.lock in the runner, so a version bump
+# that updates rs/Cargo.toml and forgets rs/Cargo.lock passes every
+# check and ships a stale lock. Reproduced: bump the manifest, leave the
+# lock, `cargo build` compiles the new version and rewrites the lock
+# without a word. This has to come first -- after a cargo command the
+# lock has already been fixed up and the check can never fail.
+#
+# Only this crate's entry is asserted. The engine's entry legitimately
+# moves whenever the sibling checkout does, which is the same reason
+# blanket `--locked` is wrong here.
+CRATE=$(awk -F'"' '/^name = /{print $2; exit}' Cargo.toml)
+WANT=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+HAVE=$(awk -v c="$CRATE" -F'"' '
+  $0 == "name = \"" c "\"" { f = 1; next }
+  f && /^version = / { print $2; exit }
+' Cargo.lock)
+
+if [[ "$WANT" != "$HAVE" ]]; then
+  echo "Cargo.lock records $CRATE ${HAVE:-<missing>}, but Cargo.toml says $WANT" >&2
+  echo "run a cargo command and commit the updated rs/Cargo.lock" >&2
+  exit 1
+fi
+
 # NOT `--locked`, deliberately, and this is the one place the plugin gate
 # differs from the engine's own (parser ci/rust/run.sh does pass it).
 #
