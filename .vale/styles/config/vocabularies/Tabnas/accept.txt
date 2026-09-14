@@ -19,6 +19,7 @@
 [Ii]nlined
 [Ll]ookahead
 [Mm]atchers
+[Nn]amespaces
 [Nn]pm
 [Nn]ullable
 [Rr]untimes

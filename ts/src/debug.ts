@@ -377,9 +377,27 @@ const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
 // Returns a memoised mapper. Distinct source names can sanitise to the same
 // string (`a_b` and `a-b` both give `a-b`), so collisions get a numeric
 // suffix — without it the grammar would silently merge two rules.
-function abnfNamer(reserve: string[]): (name: string) => string {
+//
+// RULES AND TOKENS ARE SEPARATE NAMESPACES, and that separation is the whole
+// point of the two members. A token's bare name and a rule's name are drawn
+// from different sources and can coincide: `#NR` beside a rule called `NR`
+// is ordinary. Sharing one cache merged them — the token looked up `NR`, hit
+// the entry the reserve loop had made for the RULE, and the emitter then
+// wrote the rule's own name for a terminal. A grammar whose rule `NR`
+// referenced token `#NR` came out as a self-referential `NR = NR` plus a
+// second `NR = <number>` definition: two definitions of one rule with `=`
+// rather than incremental `=/`, and a production that recognises nothing.
+//
+// Keeping the caches apart while sharing `taken` is what fixes it. The token
+// still sanitises the same way, but it allocates against everything already
+// claimed, so it suffixes to `NR-2` instead of borrowing the rule's name.
+function abnfNamer(reserve: string[]): {
+  rule: (name: string) => string
+  token: (bare: string) => string
+} {
   const isLegal = (n: string): boolean => /^[A-Za-z][A-Za-z0-9-]*$/.test(n)
-  const cache = new Map<string, string>()
+  const ruleCache = new Map<string, string>()
+  const tokenCache = new Map<string, string>()
 
   // RFC 5234 §2.1: "ABNF rule names are case-insensitive." So `Foo-Bar` and
   // `foo-bar` ARE the same rule, and the collision check has to fold case —
@@ -395,13 +413,14 @@ function abnfNamer(reserve: string[]): (name: string) => string {
   for (const n of reserve) {
     if (isLegal(n) && !isTaken(n)) {
       claim(n)
-      cache.set(n, n)
+      ruleCache.set(n, n)
     }
   }
 
-  return (name: string): string => {
-    const hit = cache.get(name)
-    if (undefined !== hit) return hit
+  // Sanitise to a legal rulename, then make it unique against everything
+  // claimed so far — reserved rule names and previously allocated names
+  // alike, since `taken` is shared by both namespaces.
+  const allocate = (name: string): string => {
     let out = name.replace(/[^A-Za-z0-9-]/g, '-')
     if (!/^[A-Za-z]/.test(out)) out = 'r' + out
     if (isTaken(out)) {
@@ -410,8 +429,20 @@ function abnfNamer(reserve: string[]): (name: string) => string {
       out = out + '-' + n
     }
     claim(out)
+    return out
+  }
+
+  const memo = (cache: Map<string, string>, name: string): string => {
+    const hit = cache.get(name)
+    if (undefined !== hit) return hit
+    const out = allocate(name)
     cache.set(name, out)
     return out
+  }
+
+  return {
+    rule: (name: string): string => memo(ruleCache, name),
+    token: (bare: string): string => memo(tokenCache, bare),
   }
 }
 
@@ -589,12 +620,12 @@ function emitAbnf(tabnas: Tabnas): string {
   const inlineRef = (name: string, seen: Set<string>): string => {
     // A user rule or a kept (non-foldable, e.g. repetition) synthetic rule
     // stays a bareword reference; only foldable synthetics are inlined.
-    if (!isFoldable(name)) return abnfName(name)
+    if (!isFoldable(name)) return abnfName.rule(name)
     if (seen.has(name)) return '' // foldable loop-back — terminates the loop
     const s2 = new Set(seen)
     s2.add(name)
     const rs: any = rules[name]
-    if (!rs) return abnfName(name)
+    if (!rs) return abnfName.rule(name)
     if (name.includes('_opt')) {
       return '[ ' + ruleSeq(rs, s2) + ' ]'
     }
@@ -626,7 +657,7 @@ function emitAbnf(tabnas: Tabnas): string {
   const lines: string[] = []
   for (const rn of ordered) {
     const body = emitBody(rules[rn], new Set([rn]))
-    lines.push(abnfName(rn) + ' = ' + body)
+    lines.push(abnfName.rule(rn) + ' = ' + body)
   }
 
   // Define each token as its own ABNF rule (named terminals), after the
@@ -650,18 +681,24 @@ function emitAbnfTerminal(
   cfg: Config,
   tin: number,
   used: Map<string, string>,
-  abnfName: (name: string) => string,
+  abnfName: { rule: (name: string) => string; token: (bare: string) => string },
 ): string {
   const fullName: string = tabnas.token[tin]
 
   const rules: any = tabnas.rule()
   if (fullName && rules[fullName]) {
-    return abnfName(fullName)
+    return abnfName.rule(fullName)
   }
 
-  // Strip the '#' sigil first so '#NR' reserves 'NR' rather than being
+  // Strip the '#' sigil first so '#NR' asks for 'NR' rather than being
   // sanitised to '-NR' and then prefixed.
-  const name = abnfName((fullName || 'T' + tin).replace(/^#/, ''))
+  //
+  // This goes through the TOKEN namespace. A rule may already hold this
+  // spelling — a grammar with a rule `NR` and the `#NR` number token is
+  // perfectly ordinary — and the token must not borrow it: that emitted a
+  // self-referential `NR = NR` plus a duplicate definition. Asking the token
+  // namespace suffixes to `NR-2` instead, leaving both definitions distinct.
+  const name = abnfName.token((fullName || 'T' + tin).replace(/^#/, ''))
   if (!used.has(name)) {
     used.set(name, abnfTokenForm(cfg, tin, fullName))
   }
@@ -714,7 +751,7 @@ function abnfTokenForm(cfg: Config, tin: number, fullName: string): string {
     BD: 'bad',
     ZZ: 'end-of-source',
   }
-  return '<' + (desc[bare] || 'built-in ' + bare) + '>'
+  return proseVal(desc[bare] || 'built-in ' + bare)
 }
 
 // A literal as an ABNF num-val: `%x0D`, or dot-concatenated for several
@@ -779,8 +816,34 @@ function regexToAbnf(re: RegExp): string {
     }
   }
 
-  // Anything else: keep it visible but mark it as non-round-tripping.
-  return '; /' + re.source + '/' + re.flags
+  // Anything else: no ABNF construct expresses this regex, so say so in the
+  // one the grammar provides for exactly that — RFC 5234 §4 prose-val, "a
+  // last resort" for describing a rule in prose. It does not round-trip, and
+  // it is not meant to; it is a legal element that names what the token
+  // matches.
+  //
+  // This returned `'; /' + source + '/' + flags` before: a bare comment. `;`
+  // runs to end of line, so the legend entry it produced (`T = ; /…/`) held
+  // no elements at all — not merely non-round-tripping but unparseable, and
+  // one such token made the WHOLE emitted grammar invalid rather than just
+  // that rule.
+  return proseVal('regex /' + re.source + '/' + re.flags)
+}
+
+// RFC 5234 §4: `prose-val = "<" *(%x20-3D / %x3F-7E) ">"`. A `>` would close
+// the value early and anything outside printable ASCII is not permitted, so
+// both are escaped rather than dropped — the text is here to say what the
+// token matches, and silently losing characters from it would defeat that.
+function proseVal(text: string): string {
+  let out = ''
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) as number
+    out +=
+      (0x20 <= cp && cp <= 0x3d) || (0x3f <= cp && cp <= 0x7e)
+        ? ch
+        : '\\u' + cp.toString(16).toUpperCase().padStart(4, '0')
+  }
+  return '<' + out + '>'
 }
 
 // Mirror of bnf's escapeRegExp, used only to validate that an unescaped
