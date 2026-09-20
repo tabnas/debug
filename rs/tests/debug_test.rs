@@ -501,6 +501,69 @@ fn a_child_trace_selection_does_not_change_its_parent() {
 // --- regressions: reporting fidelity -------------------------------------
 
 #[test]
+fn lex_lines_bound_the_source_text_they_quote() {
+    // The `src=` field used to carry the whole token source, so one long
+    // string token put its entire text on the trace line while the value
+    // beside it was cut at `maxlen`. The canonical runtime bounds both
+    // through `ctx.F`; so does this port.
+    let mut parser = fixture::build("bare").expect("a known grammar");
+    parser.options.rule.start = "top".into();
+    let string = parser
+        .options
+        .token("#ST")
+        .expect("the engine has a string token");
+    let end = parser
+        .options
+        .token("#ZZ")
+        .expect("the engine has an end token");
+    parser.define_rule("top", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![string]],
+            ..Default::default()
+        });
+        spec.add_close(AltSpec {
+            s: vec![vec![end]],
+            ..Default::default()
+        });
+    });
+    let lines = capture(&mut parser);
+    apply(
+        &mut parser,
+        DebugOptions::new()
+            .with_print(false)
+            .with_trace(TraceKinds {
+                lex: true,
+                ..TraceKinds::none()
+            }),
+    )
+    .expect("the debug plugin installs");
+
+    let maxlen = parser.options.debug.maxlen;
+    let source = format!("\"{}\"", "x".repeat(20 * maxlen));
+    parser.parse(&source).expect("a long string parses");
+
+    let captured = lines.lock().unwrap().clone();
+    let lex = captured
+        .iter()
+        .find(|line| line.starts_with("lex ") && line.contains("#ST"))
+        .unwrap_or_else(|| panic!("a lex line for the string token; got {captured:#?}"));
+    let (_, quoted) = lex
+        .split_once(" src=")
+        .expect("the lex line carries a src field");
+    assert!(
+        quoted.chars().count() <= maxlen + "...".len(),
+        "src is cut at maxlen ({maxlen}); got {} chars: {quoted}",
+        quoted.chars().count()
+    );
+    assert!(quoted.ends_with("..."), "a cut src is marked; got {quoted}");
+    assert!(
+        lex.chars().count() < source.len(),
+        "the trace line must not scale with the token source"
+    );
+}
+
+#[test]
 fn lexer_matcher_order_keeps_fractional_priorities() {
     // Truncating to an integer would report 1.2 and 1.8 as the same order.
     let mut parser = fixture::build("bare").expect("a known grammar");

@@ -16,7 +16,7 @@ divergence register — for the intentional TS/Go/Rust differences.
 | `src/abnf.rs` | `abnf` — the ABNF emitter, and the name sanitiser it needs. |
 | `src/trace.rs` | `TraceKinds` and the subscriber wiring. |
 | `tests/parity_test.rs` | The shared `../test/spec/*.tsv` fixtures. |
-| `tests/common/fixture.rs` | The named grammar registry (`bare`, `add`, `greet`). |
+| `tests/common/fixture.rs` | The named grammar registry (`bare`, `add`, `greet`, `collide`). |
 | `tests/common/spec.rs` | The TSV loader and the reporter table. |
 | `tests/debug_test.rs` | What the fixtures cannot express. |
 | `tests/version_test.rs` | The version constants. |
@@ -33,7 +33,7 @@ checkout** (`../../parser/rs`) — it is not published, so there is no
 version to fall back on and no second resolution to keep green. Clone
 `https://github.com/tabnas/parser` next to this repo.
 
-## The four things worth knowing before editing
+## The five things worth knowing before editing
 
 1. **Free functions, and infallible.** `describe` / `model` / `abnf` take
    `&Tabnas` rather than being methods: Rust cannot add methods to a type
