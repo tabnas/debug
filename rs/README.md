@@ -64,6 +64,7 @@ dump.
 To capture output instead of writing it to stderr, set the engine's sink:
 
 ```rust
+# let mut parser = tabnas::Tabnas::new();
 parser.options.debug.output = Some(std::sync::Arc::new(|line: &str| {
     // collect `line`
 }));

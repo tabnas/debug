@@ -165,10 +165,10 @@ pub(crate) fn install(parser: &mut Tabnas, kinds: Option<TraceKinds>) -> Result<
                 indent(rule.d),
                 token.name,
                 context.options.debug.format_source(&token.val),
-                token.pos,
-                token.ri,
-                token.ci,
-                quote(&token.src),
+                token.site.pos,
+                token.site.ri,
+                token.site.ci,
+                quote(&token.src, context.options.debug.maxlen),
             ));
         });
     }
@@ -284,17 +284,29 @@ fn counters(values: &std::collections::HashMap<String, i32>) -> String {
 }
 
 /// Source text for a trace line, kept on one line and bounded.
-fn quote(source: &str) -> String {
-    let escaped: String = source
-        .chars()
-        .flat_map(|ch| match ch {
-            '\n' => "\\n".chars().collect::<Vec<_>>(),
-            '\r' => "\\r".chars().collect(),
-            '\t' => "\\t".chars().collect(),
-            ch => vec![ch],
-        })
-        .collect();
-    format!("{escaped:?}")
+///
+/// Quoted the way the canonical `ctx.F` (a JSON stringifier) quotes this
+/// very field: `{:?}` escapes a newline, tab or carriage return ONCE, as
+/// `\n` / `\t` / `\r`, which is what the engine's `format_source` shows
+/// for the value beside it. Escaping them by hand first and then
+/// formatting doubled the backslash, so a line token's `src=` read `"\\n"`
+/// next to a `val` of `"\n"`, and a source holding a real newline was
+/// indistinguishable from one holding the two characters `\` `n`.
+///
+/// Bounded the way `format_source` bounds the value and `ctx.F` bounds
+/// this field: the rendered form is cut at `maxlen` characters and marked
+/// with `...`. Without the cut a single long string token put its whole
+/// source on the line, so a traced parse of untrusted input cost as much
+/// output as the input itself, per token.
+fn quote(source: &str, maxlen: usize) -> String {
+    let rendered = format!("{source:?}");
+    let mut chars = rendered.chars();
+    let prefix: String = chars.by_ref().take(maxlen).collect();
+    if chars.next().is_some() {
+        format!("{prefix}...")
+    } else {
+        prefix
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +337,25 @@ mod tests {
 
     #[test]
     fn quote_escapes_control_characters() {
-        assert_eq!(quote("a\nb"), "\"a\\\\nb\"");
+        // Escaped ONCE, as JSON (and the canonical `ctx.F`) renders them:
+        // the six characters `"a\nb"`, on one line.
+        assert_eq!(quote("a\nb", 99), "\"a\\nb\"");
+        assert_eq!(quote("\r\t", 99), "\"\\r\\t\"");
+        // A real newline and a literal backslash-n must not render alike.
+        assert_eq!(quote("a\\nb", 99), "\"a\\\\nb\"");
+        assert_ne!(quote("a\nb", 99), quote("a\\nb", 99));
+    }
+
+    #[test]
+    fn quote_is_bounded_by_maxlen() {
+        // Cut at `maxlen` characters of the rendered form and marked, as
+        // the engine's `format_source` does for the value beside it.
+        assert_eq!(quote("abcdef", 4), "\"abc...");
+        assert_eq!(quote("ab", 4), "\"ab\"");
+        // Multi-byte characters count as one each, never split.
+        assert_eq!(
+            quote("\u{1F600}\u{1F600}\u{1F600}", 3),
+            "\"\u{1F600}\u{1F600}..."
+        );
     }
 }

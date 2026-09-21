@@ -58,6 +58,13 @@ pub use model::{
 };
 pub use trace::{TraceKinds, TRACE_BANNER};
 
+/// The README's Rust examples run as doctests, so a stale one fails the
+/// gate rather than misleading the reader. Its `toml` and `bash` fences
+/// are skipped; rustdoc runs only the `rust` ones.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_examples {}
+
 /// VERSION is this crate's version. It MUST equal `ts/package.json`
 /// "version" and the `version` field in `rs/Cargo.toml`: the release
 /// orchestrator rewrites them, and `tests/version_test.rs` fails the
