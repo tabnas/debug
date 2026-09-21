@@ -564,6 +564,45 @@ fn lex_lines_bound_the_source_text_they_quote() {
 }
 
 #[test]
+fn lex_lines_quote_control_characters_once() {
+    // A line token's source IS a newline. The value beside it is rendered
+    // by the engine as JSON (`"\n"`), and the canonical `ctx.F` renders
+    // the source the same way; this port used to escape by hand and then
+    // format, doubling the backslash to `"\\n"` so a real newline read
+    // like the two characters `\` `n`.
+    let mut parser = Tabnas::make_json();
+    let lines = capture(&mut parser);
+    apply(
+        &mut parser,
+        DebugOptions::new()
+            .with_print(false)
+            .with_trace(TraceKinds {
+                lex: true,
+                ..TraceKinds::none()
+            }),
+    )
+    .expect("the debug plugin installs");
+
+    parser
+        .parse("[1,\n\t2]")
+        .expect("json with whitespace parses");
+
+    let captured = lines.lock().unwrap().clone();
+    let src_of = |token: &str| -> String {
+        let line = captured
+            .iter()
+            .find(|line| line.starts_with("lex ") && line.contains(token))
+            .unwrap_or_else(|| panic!("a lex line for {token}; got {captured:#?}"));
+        line.split_once(" src=")
+            .expect("the lex line carries a src field")
+            .1
+            .to_string()
+    };
+    assert_eq!(src_of("#LN"), "\"\\n\"", "a newline is escaped once");
+    assert_eq!(src_of("#SP"), "\"\\t\"", "a tab is escaped once");
+}
+
+#[test]
 fn lexer_matcher_order_keeps_fractional_priorities() {
     // Truncating to an integer would report 1.2 and 1.8 as the same order.
     let mut parser = fixture::build("bare").expect("a known grammar");
