@@ -21,9 +21,11 @@ on:
     paths:
       - 'go/doc/**'
       - 'ts/doc/**'
+      - 'rs/doc/**'
       - 'README.md'
       - 'go/README.md'
       - 'ts/README.md'
+      - 'rs/README.md'
       - 'docs/STYLE-GUIDE.md'
       - 'ts/scripts/gated-docs.cjs'
       - 'ts/scripts/vale-counts.cjs'
@@ -34,9 +36,11 @@ on:
     paths:
       - 'go/doc/**'
       - 'ts/doc/**'
+      - 'rs/doc/**'
       - 'README.md'
       - 'go/README.md'
       - 'ts/README.md'
+      - 'rs/README.md'
       - 'docs/STYLE-GUIDE.md'
       - 'ts/scripts/gated-docs.cjs'
       - 'ts/scripts/vale-counts.cjs'
