@@ -28,6 +28,14 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt
 ```
 
+`../ci/rust/run.sh` is the full gate and runs more than those: it adds
+`cargo fmt --check`, `cargo test --doc` (which `--all-targets` does not
+include) and `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`. That last
+one is the only command that resolves an intra-doc link. It matters here
+because `describe`, `model` and `abnf` are each a public module AND a
+re-exported function, so a bare ``[`describe`]`` is ambiguous and
+rustdoc drops it; write ``[`describe()`]`` for the function.
+
 The engine crate `tabnas` is a **path dependency on the sibling
 checkout** (`../../parser/rs`) — it is not published, so there is no
 version to fall back on and no second resolution to keep green. Clone
