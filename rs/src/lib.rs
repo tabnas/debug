@@ -6,13 +6,13 @@
 //! This is the developer tool the rest of the tabnas fleet's test suites
 //! consume. It provides four things:
 //!
-//! - [`describe`] — a human-readable dump of a live [`Tabnas`] instance:
+//! - [`describe()`] — a human-readable dump of a live [`Tabnas`] instance:
 //!   its tag, tokens, token sets, rules, alternates, lexer matchers,
 //!   config, plugins, and an ABNF rendering of the grammar.
-//! - [`model`] — the *structured* counterpart: the same information as a
+//! - [`model()`] — the *structured* counterpart: the same information as a
 //!   typed, serialisable [`DebugModel`], so tools and tests can consume
 //!   the grammar programmatically.
-//! - [`abnf`] — a re-compilable ABNF rendering of the instance's live
+//! - [`abnf()`] — a re-compilable ABNF rendering of the instance's live
 //!   grammar.
 //! - **parse tracing** that logs events as the parser runs (see
 //!   [`TraceKinds`]).
@@ -79,7 +79,7 @@ const PRINT_DECORATION: &str = "debug.print";
 /// How the debug plugin behaves once installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DebugOptions {
-    /// Dump [`describe`] after each plugin installed through
+    /// Dump [`describe()`] after each plugin installed through
     /// [`use_plugin`]. Default `true`.
     pub print: bool,
     /// Which trace kinds to log, or `None` to trace nothing. Default: all
@@ -103,7 +103,7 @@ impl DebugOptions {
     }
 
     /// Introspection only — no `USE:` dumps and no tracing. This is what
-    /// a test suite that only wants [`describe`] / [`model`] / [`abnf`]
+    /// a test suite that only wants [`describe()`] / [`model()`] / [`abnf()`]
     /// should install.
     pub fn quiet() -> Self {
         Self {
@@ -159,7 +159,7 @@ fn install(parser: &mut Tabnas, options: DebugOptions) -> Result<(), PluginError
     trace::install(parser, options.trace)
 }
 
-/// Install `plugin` on `parser`, dumping [`describe`] afterwards when the
+/// Install `plugin` on `parser`, dumping [`describe()`] afterwards when the
 /// debug plugin was installed with `print` on.
 ///
 /// TypeScript reassigns `tabnas.use` to wrap it; neither Go's `(*Tabnas).Use`

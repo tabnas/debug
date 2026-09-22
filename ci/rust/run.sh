@@ -118,6 +118,16 @@ trap 'rm -f "$LOCK_BEFORE"' EXIT
 "${CARGO[@]}" test --doc
 "${CARGO[@]}" clippy --all-targets --all-features -- -D warnings
 
+# Rustdoc, with its warnings fatal. Neither `build` nor `clippy` resolves
+# an intra-doc link, and `test --doc` only RUNS the examples -- a link
+# that cannot be resolved is silently rendered as plain text by all of
+# them. This crate re-exports `describe`, `model` and `abnf` as functions
+# beside modules of the same name, so every `[`describe`]` in the docs
+# was ambiguous and dropped; nothing in the gate said so. `--no-deps`
+# keeps the sibling engine's own docs out of the verdict, for the same
+# reason `fmt` is not run with `--all`.
+RUSTDOCFLAGS="-D warnings" "${CARGO[@]}" doc --no-deps
+
 # Now that cargo has had every chance to rewrite it, the lock must still
 # describe the same resolution it did when committed.
 if ! diff -q <(lock_without_engine_version "$LOCK_BEFORE") \

@@ -1,6 +1,6 @@
 /* Copyright (c) 2021-2026 Richard Rodger and other contributors, MIT License */
 
-//! The structured counterpart to [`crate::describe`]: an instance and its
+//! The structured counterpart to [`crate::describe()`]: an instance and its
 //! grammar as typed, JSON-serialisable data, so tools and tests can
 //! consume the grammar programmatically.
 //!
@@ -58,7 +58,7 @@ pub enum DebugSeqItem {
 }
 
 /// The structured form of a single rule alternate — the data behind the
-/// `ALTS` text of [`crate::describe`].
+/// `ALTS` text of [`crate::describe()`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DebugAltInfo {
     /// Token name(s) per lookahead position.

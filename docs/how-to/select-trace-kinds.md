@@ -49,5 +49,44 @@ j.Use(debug.Debug, map[string]any{"trace": map[string]any{
 }}) // rule lines only
 ```
 
+## Rust
+
+Rust options are a typed struct rather than an option map, so a selection
+is a `TraceKinds` value with the same six fields:
+
+```rust
+use tabnas_debug::{apply, DebugOptions, TraceKinds};
+
+// All kinds.
+apply(&mut parser, DebugOptions::default())?;
+
+// Off.
+apply(&mut parser, DebugOptions::default().without_trace())?;
+
+// Rule and lex lines only. `TraceKinds::none()` starts from everything
+// off, so nothing has to be disabled explicitly.
+apply(
+    &mut parser,
+    DebugOptions::default().with_trace(TraceKinds {
+        rule: true,
+        lex: true,
+        ..TraceKinds::none()
+    }),
+)?;
+```
+
+That is the one shape difference worth knowing: TypeScript and Go merge a
+partial selection over an all-on default, so an unwanted kind has to be
+turned off by name, while a Rust `TraceKinds` literal states the whole
+selection at once.
+
+`step` is accepted for option-name parity but never logs, because the
+Rust engine emits no per-step event. Selecting `step` alone therefore
+installs no tracing at all, not even the per-parse banner.
+
+Re-applying the plugin replaces the selection rather than adding to it,
+including with `without_trace()`, which turns tracing off on an instance
+that was already tracing.
+
 See the [Reference](../reference.md#trace-output) for what each kind
 logs.

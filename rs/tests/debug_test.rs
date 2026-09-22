@@ -78,6 +78,99 @@ fn describe_emits_every_section_in_order() {
     }
 }
 
+/// A non-trivial grammar: a `top` rule that pushes to a single-character
+/// rule name `x`, with a group tag on the open alternate. Mirrors
+/// `makeTreeGrammar` in `ts/test/debug.test.js` and `treeGrammar` in
+/// `go/debug_test.go`, so the three describe-body tests assert the same
+/// shape.
+///
+/// The token names carry the `#` prefix where the TypeScript mirror
+/// writes them bare. That is the ENGINE, not the plugin:
+/// `Tabnas::token_with_source` normalises a fixed token's name to `#…`,
+/// and `describe` prints whatever `token_name` reports. Writing them
+/// bare here would still produce `#Ta` in the dump, so they are written
+/// as the engine stores them.
+fn tree_grammar() -> Tabnas {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "top".into();
+    let ta = parser.token_with_source("#Ta", "a");
+    let tx = parser.token_with_source("#Tx", "x");
+    let end = parser
+        .options
+        .token("#ZZ")
+        .expect("the engine has an end token");
+
+    parser.define_rule("top", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![ta]],
+            p: Some("x".into()),
+            g: "topgrp".into(),
+            ..Default::default()
+        });
+        spec.add_close(AltSpec {
+            s: vec![vec![end]],
+            ..Default::default()
+        });
+    });
+    parser.define_rule("x", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![tx]],
+            ..Default::default()
+        });
+        spec.add_close(AltSpec {
+            s: vec![vec![end]],
+            ..Default::default()
+        });
+    });
+    parser
+}
+
+/// The slice of a `describe` dump between two section banners.
+fn section<'a>(text: &'a str, from: &str, to: &str) -> &'a str {
+    let start = text.find(from).unwrap_or_else(|| panic!("no {from}"));
+    let end = text.find(to).unwrap_or_else(|| panic!("no {to}"));
+    &text[start..end]
+}
+
+#[test]
+fn describe_lists_custom_tokens_with_their_fixed_source() {
+    let text = describe(&tree_grammar());
+    let tokens = section(&text, SECTIONS[1], SECTIONS[2]);
+    assert!(tokens.contains("#Ta"), "TOKENS should list #Ta:\n{tokens}");
+    assert!(tokens.contains("#Tx"), "TOKENS should list #Tx:\n{tokens}");
+    assert!(
+        tokens.contains("\"a\""),
+        "TOKENS should show the fixed source of Ta:\n{tokens}"
+    );
+}
+
+#[test]
+fn describe_renders_alt_bodies_with_sequence_push_and_group() {
+    let text = describe(&tree_grammar());
+    let alts = section(&text, SECTIONS[3], SECTIONS[4]);
+    for expected in ["top:", "OPEN:", "CLOSE:", "[#Ta]", "p=x", "g=topgrp"] {
+        assert!(
+            alts.contains(expected),
+            "ALTS should contain {expected:?}:\n{alts}"
+        );
+    }
+}
+
+#[test]
+fn describe_keeps_a_single_character_push_target_in_the_rules_tree() {
+    // The open-push edge from `top` to the single-character rule `x` must
+    // survive. A previous off-by-one in the canonical runtime dropped
+    // single-character targets, so all three ports pin it.
+    let text = describe(&tree_grammar());
+    let rules = section(&text, SECTIONS[2], SECTIONS[3]);
+    assert!(
+        rules.contains("op: x"),
+        "RULES tree should contain the single-char push edge op: x:\n{rules}"
+    );
+}
+
 #[test]
 fn describe_reports_the_instance_tag() {
     let mut parser = fixture::build("bare").expect("a known grammar");

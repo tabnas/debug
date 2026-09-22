@@ -19,6 +19,7 @@ divergence register — for the intentional TS/Go/Rust differences.
 | `tests/common/fixture.rs` | The named grammar registry (`bare`, `add`, `greet`, `collide`). |
 | `tests/common/spec.rs` | The TSV loader and the reporter table. |
 | `tests/debug_test.rs` | What the fixtures cannot express. |
+| `tests/abnf_test.rs` | Whole-emitter ABNF shapes, mirroring the `TestAbnf*` set in `../go`. |
 | `tests/version_test.rs` | The version constants. |
 
 ```bash
@@ -27,6 +28,14 @@ cargo test --all-targets
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt
 ```
+
+`../ci/rust/run.sh` is the full gate and runs more than those: it adds
+`cargo fmt --check`, `cargo test --doc` (which `--all-targets` does not
+include) and `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`. That last
+one is the only command that resolves an intra-doc link. It matters here
+because `describe`, `model` and `abnf` are each a public module AND a
+re-exported function, so a bare ``[`describe`]`` is ambiguous and
+rustdoc drops it; write ``[`describe()`]`` for the function.
 
 The engine crate `tabnas` is a **path dependency on the sibling
 checkout** (`../../parser/rs`) — it is not published, so there is no
@@ -50,6 +59,15 @@ version to fall back on and no second resolution to keep green. Clone
    the live engine. That independence is what makes the round-trip claim
    meaningful, and it is why the fixture grammars are hand-written
    against the engine rather than compiled from ABNF source.
+
+   The round-trip itself is proved once, in `ts/test/abnf.test.js`, which
+   loads `@tabnas/abnf` by sibling PATH so it stays out of the dependency
+   graph. Neither port repeats it, and neither should: a dev-dependency
+   on an ABNF compiler would put the independence claim in doubt even
+   though nothing ships it. What the ports do instead is assert the
+   emitted TEXT for the same shapes, in `tests/abnf_test.rs` here and the
+   `TestAbnf*` set in `../go`. Keep the three sets in step, and treat a
+   shape that only one of them holds as a gap rather than a choice.
 
 4. **`step` never fires.** The Rust engine has no `ctx.log` and emits no
    per-step event, so `TraceKinds::step` is accepted for option-name

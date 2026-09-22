@@ -23,7 +23,8 @@ This directory exists because session credentials cannot write
   Google-convention arm rather than the whole gate.
 
 - **`workflows/rust.yml`** — the Rust gate: `rs/` built, tested,
-  `rustfmt`-checked and clippy-clean at `-D warnings`. The commands live
+  `rustfmt`-checked, clippy-clean at `-D warnings`, and documented with
+  rustdoc warnings fatal. The commands live
   in `ci/rust/run.sh`, which the workflow calls and you can run too;
   `make test-rs` stays the fast inner loop.
 

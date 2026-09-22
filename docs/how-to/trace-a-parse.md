@@ -45,11 +45,40 @@ specific input.
    remaining differences (no alt index on `parse` lines, no matcher name
    on `lex` lines).
 
+## Rust
+
+1. Install the plugin with tracing on and printing off, then parse:
+
+   ```rust
+   use tabnas::Tabnas;
+   use tabnas_debug::{apply, DebugOptions};
+
+   fn main() -> Result<(), Box<dyn std::error::Error>> {
+       let mut parser = Tabnas::new();
+       apply(&mut parser, DebugOptions::default().with_print(false))?;
+       parser.parse(r#"{ "a": 1 }"#)?;
+       Ok(())
+   }
+   ```
+
+2. Trace lines go to the engine's own debug sink, stderr by default.
+   There is no `out` option: set `parser.options.debug.output` to capture
+   them instead.
+
+3. You get five of the six kinds: `stack`, `rule`, `lex`, `parse` and
+   `node`. `step` never fires, because the Rust engine emits no per-step
+   event. Rust `parse` lines do name the matched alternate's
+   push/replace/back/groups, which Go's cannot; see the
+   [trace output reference](../reference.md#trace-output).
+
 ## Notes
 
 - TypeScript trace output goes to the parser's configured console; to
   capture it, override that console. Go trace output goes to stdout by
-  default, or to the `io.Writer` passed as `opts["out"]`.
-- If you see no output, confirm tracing is enabled (and, in TypeScript,
-  that at least one kind is on — see
-  [Choose which events to trace](select-trace-kinds.md)).
+  default, or to the `io.Writer` passed as `opts["out"]`. Rust trace
+  output goes to `parser.options.debug.output`, stderr by default.
+- If you see no output, confirm tracing is enabled and that at least one
+  kind that the runtime can emit is on — see
+  [Choose which events to trace](select-trace-kinds.md). In Rust a
+  selection of `step` alone installs no tracing at all, not even the
+  per-parse banner.

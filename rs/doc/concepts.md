@@ -51,8 +51,8 @@ error to surface and returning `Result` would be noise.
 INSTANCE  TOKENS  RULES  ALTS  LEXER  CONFIG  PLUGIN  ABNF
 ```
 
-`../test/spec/sections.tsv` pins them byte-for-byte for every grammar in
-the shared registry, in all three runtimes. That is what makes two
+`../../test/spec/sections.tsv` pins them byte-for-byte for every
+grammar in the shared registry, in all three runtimes. That is what makes two
 runtimes' dumps diffable. The text BETWEEN the banners is deliberately
 not pinned: the engines expose different detail, and pinning the prose
 would freeze an accident.
@@ -120,7 +120,7 @@ order. An unstable dump is not a dump.
 
 TypeScript is canonical; this Rust port mirrors its option names,
 defaults, output format and section ordering, and passes the same shared
-`../test/spec/*.tsv` fixtures. The differences are **intentional**,
+`../../test/spec/*.tsv` fixtures. The differences are **intentional**,
 imposed by the Rust engine's API and by Rust's type system. The full list
 is in [`../../docs/reference.md`](../../docs/reference.md); the ones that
 change how you write code:

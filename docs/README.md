@@ -4,10 +4,11 @@ Debug plugin for the [`tabnas`](https://github.com/tabnas/parser)
 parser. It adds a grammar `describe()` method and optional parse tracing
 to a parser instance.
 
-These docs apply to both implementations — the canonical TypeScript
-package (`ts/`) and the Go port (`go/`). The two engines expose tracing
-and introspection differently, so the examples show each language's real
-API; the [reference](reference.md) lists where they diverge.
+These docs apply to all three implementations: the canonical TypeScript
+package (`ts/`), the Go port (`go/`) and the Rust port (`rs/`). The three
+engines expose tracing and introspection differently, so the examples
+show each language's real API; the [reference](reference.md) lists where
+they diverge.
 
 Start where your goal fits:
 
