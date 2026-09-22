@@ -124,13 +124,13 @@ panic is recovered and returned as an `"internal"`-code
 `*tabnas.TabnasError` with an empty report string. On success the error
 is `nil`.
 
-Both produce a snapshot of the instance's active configuration with no
-side effects, organised into these sections, in this order, with these
+All three produce a snapshot of the instance's active configuration with
+no side effects, organised into these sections, in this order, with these
 exact headers:
 
 | Header | Contents |
 |---|---|
-| `========= INSTANCE ========` | The instance tag (`tag:`). Both plugins print the engine's tag verbatim, and both engines now default an unset tag to `-`, so an untagged instance renders `tag: -` in either runtime. (See the engine-version note below: a Go engine older than the `tabnas.DefaultTag` alignment left an unset tag empty and rendered a bare `tag:`.) |
+| `========= INSTANCE ========` | The instance tag (`tag:`). Every port prints the engine's tag verbatim, and all three engines default an unset tag to `-`, so an untagged instance renders `tag: -` everywhere. (See the engine-version note below: a Go engine older than the `tabnas.DefaultTag` alignment left an unset tag empty and rendered a bare `tag:`.) |
 | `========= TOKENS ========` | Each token: name, tin, and fixed source text (if any). Followed by a token-set sub-block (`IGNORE`, `VAL`, `KEY`, plus any custom set) listing member token names. |
 | `========= RULES =========` | Each rule's push/replace transition tree: the distinct rule-name targets reached by an open-push (`op`), open-replace (`or`), close-push (`cp`) and close-replace (`cr`) alternate. Empty categories are omitted; single-character rule names are valid targets. Function-valued (`PF`/`RF`) targets render as `<F>`. |
 | `========= ALTS =========` | Each rule's open and close alternates: token sequence, push (`p`), replace (`r`), backtrack (`b`), counters (`n`), group (`g`), the action/condition/modifier presence flags (`A`/`C`/`H`), and the declarative condition (`CD`). Function-valued push/replace render as `p=<F>` / `r=<F>`. Per-position multi-token sets render as `[a,b]`, a single token bare. |
@@ -150,12 +150,12 @@ can be diffed. The eight of them are the parity contract that
 | Go | `debug.Model(j)` — returns `(*DebugModel, error)` |
 | Rust | `tabnas_debug::model(&parser)` — returns `DebugModel` |
 
-Both return the same information as `describe()` / `Describe` as a
+All three return the same information as `describe()` / `Describe` as a
 typed, JSON-serialisable object: the token table (`tokens`), token sets
 (`tokenSets`), rules and alternates as data (`rules`), the
 rule-reference graph (`graph`), lexer matchers (`lexer`), key config
-(`config`), plugins (`plugins`) and the ABNF text (`abnf`). Both
-runtimes export the full type set: `DebugModel`, `DebugTokenInfo`,
+(`config`), plugins (`plugins`) and the ABNF text (`abnf`). All three
+export the full type set: `DebugModel`, `DebugTokenInfo`,
 `DebugTokenSet`, `DebugAltInfo`, `DebugRuleInfo`, `DebugRuleEdges`,
 `DebugLexMatcher`, `DebugConfigInfo`, `DebugPluginInfo` — the Go structs
 carry JSON tags matching the TS field names, so serialised output is
@@ -218,11 +218,13 @@ in the fixture, and this note can go.
 ## Trace output
 
 Under tracing, each event prints one line to the instance's console
-(TypeScript) or to `opts["out"]` / `os.Stdout` (Go). Both runtimes begin
-each parse with a `========= TRACE ==========` banner and log the enabled
-kinds (`step`, `rule`, `lex`, `parse`, `node`, `stack`); most lines lead
-with the parse state — upcoming source, the token window
-`[t0 t1]~[tin0 tin1]`, and the parse depth.
+(TypeScript), to `opts["out"]` / `os.Stdout` (Go), or to the engine's
+own debug sink, `parser.options.debug.output` (Rust). Every runtime
+begins each parse with a `========= TRACE ==========` banner and logs
+the enabled kinds (`step`, `rule`, `lex`, `parse`, `node`, `stack`);
+most lines lead with the parse state — upcoming source, the token window
+`[t0 t1]~[tin0 tin1]`, and the parse depth. Rust logs five of the six:
+`step` has no engine hook.
 
 Go derives the streams from the engine's hooks (rule/lex subscribers, a
 parse-prepare hook, and after-open/after-close rule state actions); the
