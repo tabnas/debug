@@ -19,6 +19,7 @@ divergence register — for the intentional TS/Go/Rust differences.
 | `tests/common/fixture.rs` | The named grammar registry (`bare`, `add`, `greet`, `collide`). |
 | `tests/common/spec.rs` | The TSV loader and the reporter table. |
 | `tests/debug_test.rs` | What the fixtures cannot express. |
+| `tests/abnf_test.rs` | Whole-emitter ABNF shapes, mirroring the `TestAbnf*` set in `../go`. |
 | `tests/version_test.rs` | The version constants. |
 
 ```bash
