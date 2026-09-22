@@ -60,9 +60,11 @@ The **second column's header name selects what the runner reports**:
 
 `ts/test/fixture.js` (`GRAMMARS`), `go/fixture_test.go` (`grammars`) and
 `rs/tests/common/fixture.rs` (`build`) hold the same named grammars —
-`bare`, `add`, `greet`. A fixture row addresses one by name, so **all
-three registries must stay in step**; adding a grammar means adding it to
-all three.
+`bare`, `add`, `greet`, `collide`. A fixture row addresses one by name, so
+**all three registries must stay in step**; adding a grammar means adding
+it to all three. Every fixture in this directory covers all four, so a
+grammar added to the registries without a row in each `.tsv` is a coverage
+gap rather than a fixture that simply does not apply.
 
 The grammars are hand-written against the engine on purpose: `@tabnas/abnf`
 must NOT become a dependency of `@tabnas/debug` (the emitter reads only the
