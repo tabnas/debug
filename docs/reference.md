@@ -350,7 +350,14 @@ imposed by the Rust engine's public API and by Rust's type system:
    no Rust half, so `rs/tests/common/spec.rs` implements the loader. It
    is the one loader that CAN drift from the other two; `test/AGENTS.md`
    pins the codec it has to keep.
-10. **Re-installing updates the trace selection rather than stacking it.**
+10. **Fixed token names carry a `#` prefix.** `Tabnas::token_with_source`
+    normalises a fixed token's name to `#…`, so a token declared `Ta`
+    reports as `#Ta` in `TOKENS`, in `ALTS` sequences and in
+    `model().tokens`. TypeScript stores the name as given. This is an
+    engine convention rather than a plugin choice: both ports print what
+    `token_name` returns. It does not reach the shared fixtures, whose
+    grammars name every token with the prefix already.
+11. **Re-installing updates the trace selection rather than stacking it.**
     The Rust engine accumulates subscribers and parse-prepare hooks, so
     the plugin registers its callbacks once per instance and has later
     installs replace a shared selection — including with `trace: None`,
