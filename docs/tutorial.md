@@ -56,6 +56,33 @@ func main() {
 }
 ```
 
+### Rust
+
+The engine crate is unpublished, so it is consumed as a sibling
+checkout. Clone `https://github.com/tabnas/parser` next to this
+repository and declare both by path:
+
+```toml
+[dependencies]
+tabnas = { path = "../parser/rs" }
+tabnas-debug = { path = "../debug/rs" }
+```
+
+Create `src/main.rs`:
+
+```rust
+use tabnas::Tabnas;
+use tabnas_debug::{apply, describe, DebugOptions};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut parser = Tabnas::new();
+    apply(&mut parser, DebugOptions::quiet())?;
+    println!("ready");
+    let _ = describe(&parser);
+    Ok(())
+}
+```
+
 At this point the plugin is available but quiet.
 
 ## 2. Describe the grammar
@@ -79,8 +106,16 @@ if err != nil {
 fmt.Println(report)
 ```
 
-Run it. You will see a report divided into labelled sections — `INSTANCE`,
-`TOKENS`, `RULES`, `ALTS`, `LEXER`, `CONFIG` and `PLUGIN`. Each lists part of the parser's
+Rust — `describe` is a free function too, and an infallible one, because
+the Rust engine's accessors cannot fail:
+
+```rust
+println!("{}", tabnas_debug::describe(&parser));
+```
+
+Run it. You will see a report divided into eight labelled sections:
+`INSTANCE`, `TOKENS`, `RULES`, `ALTS`, `LEXER`, `CONFIG`, `PLUGIN` and
+`ABNF`. Each lists part of the parser's
 active configuration. The engine ships no grammar of its own, so a bare
 instance shows little; add tokens and rules (or load a grammar plugin)
 and they appear here. Skim it — the point is that the grammar is visible.
@@ -104,11 +139,22 @@ j.Use(debug.Debug, map[string]any{"trace": true})
 j.Parse("a:1")
 ```
 
-Run it. You will see one line per parse event, tagged by kind in both
-runtimes: `step`, `stack`, `rule` (each rule opening and closing), `lex`
+Rust:
+
+```rust
+let mut traced = Tabnas::new();
+apply(&mut traced, DebugOptions::default().with_print(false))?;
+traced.parse("a:1")?;
+```
+
+Run it. You will see one line per parse event, tagged by kind:
+`step`, `stack`, `rule` (each rule opening and closing), `lex`
 (each token produced), `parse` (the alternate match result) and `node`
 (the node built so far). Each line shows where in the source the parser
-is and what it decided.
+is and what it decided. Rust emits five of the six: the Rust engine has
+no per-step event, so `step` is accepted as an option name and logs
+nothing. Rust trace lines go to the engine's own debug sink, stderr by
+default, rather than to a console the plugin owns.
 
 ## 4. Read one trace line
 
@@ -123,6 +169,7 @@ You loaded the plugin, printed a grammar, enabled tracing, and read the
 parser's per-event log. From here:
 
 - [Trace a parse](how-to/trace-a-parse.md) in your own project.
-- [Choose which events to trace](how-to/select-trace-kinds.md) (TypeScript).
+- [Choose which events to trace](how-to/select-trace-kinds.md), in any
+  of the three runtimes.
 - The [Reference](reference.md) and [Explanation](explanation.md) cover
   what the output means and how the plugin works.

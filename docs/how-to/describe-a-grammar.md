@@ -36,16 +36,35 @@ if err != nil {
 fmt.Println(report)
 ```
 
+## Rust
+
+`describe` is a free function here too, and an infallible one: the Rust
+engine's accessors cannot fail, so there is no error to return. As in
+Go, no plugin has to be installed to call it:
+
+```rust
+use tabnas::Tabnas;
+
+let parser = Tabnas::new();
+println!("{}", tabnas_debug::describe(&parser));
+```
+
+For the same information as data rather than text, call
+`tabnas_debug::model(&parser)`, which returns a serialisable
+`DebugModel`.
+
 ## Reading the output
 
-The report is divided into labelled sections in a fixed order:
-`INSTANCE`, `TOKENS`, `RULES`, `ALTS`, `LEXER`, `CONFIG` and `PLUGIN`. The
+The report is divided into eight labelled sections in a fixed order:
+`INSTANCE`, `TOKENS`, `RULES`, `ALTS`, `LEXER`, `CONFIG`, `PLUGIN` and
+`ABNF`. The
 [Reference](../reference.md#describing-a-grammar) explains each, and
-notes where the Go output is summarised relative to TypeScript.
+notes where the Go and Rust output is summarised relative to TypeScript.
 
 ## Diffing two grammars
 
 Because the section order and headers are stable and identical across
-both implementations, you can capture the output before and after a
+all three implementations, you can capture the output before and after a
 change — or one language against the other — and diff the strings to see
-what differs.
+what differs. The shared `test/spec/sections.tsv` fixture is what keeps
+that true: every runtime runs it, over the same named grammars.
