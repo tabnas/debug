@@ -70,7 +70,7 @@ mod readme_examples {}
 /// orchestrator rewrites them, and `tests/version_test.rs` fails the
 /// build if they drift. Mirrors `VERSION` in `ts/src/debug.ts` and
 /// `const VERSION` in `go/debug.go`.
-pub const VERSION: &str = "0.3.7";
+pub const VERSION: &str = "0.3.8";
 
 /// The decoration key under which the plugin records its `print` setting,
 /// so [`use_plugin`] can honour it later.
