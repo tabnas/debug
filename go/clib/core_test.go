@@ -2,7 +2,7 @@
 
 // The library's contract, tested where it is testable.
 //
-// tabnas-clib-template: v3 (stamped by admin tasks/adopt-clib.sh;
+// tabnas-clib-template: v4 (stamped by admin tasks/adopt-clib.sh;
 // edit the template and re-stamp, not this file).
 //
 // The cgo shim in tabnas_c.go cannot be unit-tested (Go forbids cgo in
@@ -18,13 +18,13 @@ import (
 )
 
 const (
-	validSample   = "a:1, b:[x, y]"
-	invalidSample = "a:1]"
+	validSample   = "{\"a\":1,\"b\":[true,null,\"x\"]}"
+	invalidSample = "{\"a\":1,}"
 
 	// optsSample is the tabnas_grammar argument every handle below is
 	// built from: the tsv `opts` column, "" for a row that defines no
 	// options (which is (NULL, 0) at the C boundary).
-	optsSample = ""
+	optsSample = "{\"v\":2,\"options\":{\"tokenSet\":{\"KEY\":[\"#ST\"],\"VAL\":[\"#ST\",\"#NR\",\"#VL\"]}},\"rule\":{\"val\":{\"open\":[{\"s\":\"#OB\",\"p\":\"map\",\"b\":1,\"a\":\"@reset$\"},{\"s\":\"#OS\",\"p\":\"list\",\"b\":1,\"a\":\"@reset$\"},{\"s\":\"#VAL\",\"a\":\"@reset$\"}],\"close\":[{\"s\":\"#ZZ\",\"a\":\"@value$\"},{\"b\":1,\"a\":\"@value$\"}]},\"map\":{\"open\":[{\"s\":\"#OB #CB\",\"b\":1,\"a\":\"@object$\"},{\"s\":\"#OB\",\"p\":\"pair\",\"a\":\"@object$\"}],\"close\":[{\"s\":\"#CB\"}]},\"list\":{\"open\":[{\"s\":\"#OS #CS\",\"b\":1,\"a\":\"@array$\"},{\"s\":\"#OS\",\"p\":\"elem\",\"a\":\"@array$\"}],\"close\":[{\"s\":\"#CS\"}]},\"pair\":{\"open\":[{\"s\":\"#KEY #CL\",\"p\":\"val\",\"u\":{\"pair\":true},\"a\":\"@key$\"}],\"close\":[{\"s\":\"#CA\",\"r\":\"pair\",\"a\":\"@setval$\"},{\"s\":\"#CB\",\"b\":1,\"a\":\"@setval$\"}]},\"elem\":{\"open\":[{\"p\":\"val\"}],\"close\":[{\"s\":\"#CA\",\"r\":\"elem\",\"a\":\"@push$\"},{\"s\":\"#CS\",\"b\":1,\"a\":\"@push$\"}]}}}"
 )
 
 func decode(t *testing.T, doc string) map[string]any {

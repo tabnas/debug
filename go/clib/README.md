@@ -1,6 +1,6 @@
 # libtabnasdebug — the debug parser as a C ABI
 
-<!-- tabnas-clib-template: v3 — stamped by admin tasks/adopt-clib.sh;
+<!-- tabnas-clib-template: v4 — stamped by admin tasks/adopt-clib.sh;
      edit the template and re-stamp, not this file. -->
 
 The debug format parser as a C shared library, so languages with no
@@ -20,7 +20,7 @@ ZIG=/path/to/zig ./build.sh all
 
 | Function | Returns |
 |---|---|
-| `tabnas_version()` | `{"ok":true,"lib":"libtabnasdebug","format":"debug","template":"v3"}` |
+| `tabnas_version()` | `{"ok":true,"lib":"libtabnasdebug","format":"debug","template":"v4"}` |
 | `tabnas_grammar(opts, len)` | `{"ok":true,"handle":N}` — opts reserved, pass `(NULL, 0)`, unless the format notes below define them |
 | `tabnas_parse(handle, src, len)` | `{"ok":true,"accept":true[,"value":…]}` or `{"ok":true,"accept":false,"error":{…}}` |
 | `tabnas_grammar_free(handle)` | — |
@@ -66,7 +66,7 @@ const c = @cImport(@cInclude("tabnas.h"));
 
 ## Format notes
 
-debug is not a format but the parse-tracing plugin, so this library parses jsonic (lenient JSON, the grammar `jsonic --debug` traces) with the Debug plugin installed, all six trace kinds on, and the trace captured per handle rather than written to the host process's stdout. An accepted input's `value` is therefore `{"value": <parsed jsonic>, "trace": "<trace text>"}`, not the bare parsed value; a rejection carries the ordinary diagnostic and no trace, because the ABI has no slot for one. The trace is informative text, not a contract, and it is expensive: roughly 300 times the input in size, and quadratic in time, because node and rule-state lines serialize the whole growing node before truncating it. Feed it small inputs, and use libtabnasjsonic to validate. `describe`, `model` and `abnf` are per-grammar and have no slot in the five-symbol ABI. Handle creation runs a canary parse that must produce a trace, so if the plugin stops wiring its trace, `tabnas_grammar` fails loudly instead of every parse returning an empty trace.
+The library runs on the engine, not on another grammar: `tabnas_grammar`'s argument is DEFINED, as in libtabnasparser, and is a serialized GrammarSpec (the JSON `Tabnas.grammarSpec()` / `GrammarSpecFromJSON` exchange), which is installed first; the Debug plugin is then installed on it with all six trace kinds on and the trace captured per handle rather than written to the host process's stdout. debug is not a format but the parse-tracing plugin, so it traces whatever grammar the spec defines. An accepted input's `value` is `{"value": <parsed value>, "trace": "<trace text>"}`, not the bare parsed value; a rejection carries the ordinary diagnostic and no trace, because the ABI has no slot for one. The trace is informative text, not a contract, and it is expensive. Node and rule-state lines serialise the whole growing node, so for flat input the trace runs to over a thousand times the input, and it grows quadratically with nesting depth (measured: about 0.56 MB at depth 50 and 120 MB at depth 800). A deeply nested input of a few tens of kilobytes can therefore exhaust the host's memory; feed this library small inputs and use libtabnasparser to validate. `describe`, `model` and `abnf` have no slot in the five-symbol ABI. Handle creation runs a canary parse that must produce a trace, so if the plugin stops wiring its trace, `tabnas_grammar` fails loudly instead of every parse returning an empty trace.
 
 ## Layout
 
