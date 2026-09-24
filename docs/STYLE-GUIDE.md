@@ -4,7 +4,7 @@ How the tabnas documentation is written. Adapted from
 [aontu](https://github.com/aontu-lang/aontu)'s `docs/STYLE-GUIDE.md`,
 with tabnas's terminology, three-runtime file layout, and executable-example
 conventions. This guide is normative for every page `ts/scripts/gated-docs.cjs`
-lists: 16 pages in this repository. It exists so that a page written next year sounds like a
+lists: 24 pages in this repository. It exists so that a page written next year sounds like a
 page written this year, and so that a reviewer can point at a rule instead
 of arguing taste.
 
@@ -40,15 +40,14 @@ drift from the other:
 | `ts/scripts/vale-counts.cjs` | `make prose` | that every count in `.vale.ini`, and the total below, are what Vale reports |
 
 The gated set is the four Diátaxis kinds under `ts/doc/`, `go/doc/` and
-`rs/doc/`, the root README, and the three package READMEs. It is not
-every reader-facing page. The cross-language pages under `docs/`
-(`docs/README.md`, the tutorial, the four how-to guides, the reference
-and the explanation) are written for readers, and `README.md` and
-`rs/README.md` link to `docs/reference.md`, but `gated-docs.cjs` does
-not list them, so neither Vale nor `ts/test/docs.test.js` reads them.
-The agent guides (`AGENTS.md`, `CLAUDE.md` and the nested `AGENTS.md`
-files) are working documents, and they are out, as is
-`go/clib/README.md`, whose text is stamped from an admin template.
+`rs/doc/`, the cross-language pages under `docs/` (`docs/README.md`, the
+tutorial, the four how-to guides, the reference and the explanation), the
+root README, and the three package READMEs. This guide is not in it: it
+has to name what it bans, the pronouns and the patterns included, and
+`ts/test/docs.test.js` holds it out as a working document. The agent
+guides (`AGENTS.md`, `CLAUDE.md` and the nested `AGENTS.md` files) are
+working documents too, and they are out, as is `go/clib/README.md`,
+whose text is stamped from an admin template.
 
 **Four checks live in the local gate rather than in Vale, and the reason
 is capability, not preference.**
@@ -71,7 +70,7 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 527 alerts across 16 files. Those
+a clean run over the gated set: 786 alerts across 24 files. Those
 numbers were written by hand once, and this sentence and the one in
 `.vale.ini` drifted apart from each other and from a run.
 `node ts/scripts/vale-counts.cjs` now reads both against a live Vale run
@@ -96,9 +95,10 @@ page may do:
 | Reference | state facts exhaustively and dryly, pin claims to tests | narrate, persuade, teach |
 | Explanation | argue, compare, admit trade-offs, tell the design's story | be the only place a fact lives |
 
-Which page is which kind follows its name: `tutorial.md`, `guide.md`
-and `plugins.md`, `reference.md` / `api.md` / `options.md`, and
-`concepts.md`. A README is an orientation hub that routes to them.
+Which page is which kind follows its name: `tutorial.md`; `guide.md`,
+`plugins.md` and the pages under `how-to/`; `reference.md` / `api.md` /
+`options.md`; and `concepts.md` or `explanation.md`. A README is an
+orientation hub that routes to them.
 
 One fact appears in all four kinds at different altitudes (met in the
 tutorial, used in a guide, specified in the reference, argued in the

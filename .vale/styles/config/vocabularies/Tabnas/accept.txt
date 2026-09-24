@@ -24,18 +24,23 @@
 
 ABNF
 [Aa]ccessors
+APIs
 [Bb]oolean
 Clippy
 [Cc]onfig
 [Dd]ereferenced
 [Dd]iffable
+[Ff]alsy
 [Ff]unc
 [Ii]nlined
+[Ll]exing
 [Ll]ookahead
 [Mm]atchers
+[Nn]amespace
 [Nn]amespaces
 npm
 [Nn]ullable
+[Pp]arser's
 [Rr]untimes
 [Ss]erialisable
 [Ss]tderr

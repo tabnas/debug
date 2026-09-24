@@ -20,6 +20,18 @@ const PAGES = [
   "rs/doc/guide.md",
   "rs/doc/reference.md",
   "rs/doc/tutorial.md",
+  // The cross-language pages, one Diátaxis set covering all three
+  // runtimes. docs/STYLE-GUIDE.md is not one of them: it is the rule
+  // book, it has to name what it bans, and docs.test.js holds it out as
+  // a working document.
+  "docs/README.md",
+  "docs/tutorial.md",
+  "docs/how-to/describe-a-grammar.md",
+  "docs/how-to/select-trace-kinds.md",
+  "docs/how-to/silence-use-output.md",
+  "docs/how-to/trace-a-parse.md",
+  "docs/reference.md",
+  "docs/explanation.md",
   "README.md",
   "ts/README.md",
   "go/README.md",
@@ -29,7 +41,8 @@ const PAGES = [
 const TUTORIALS = [
   "ts/doc/tutorial.md",
   "go/doc/tutorial.md",
-  "rs/doc/tutorial.md"
+  "rs/doc/tutorial.md",
+  "docs/tutorial.md"
 ]
 
 
