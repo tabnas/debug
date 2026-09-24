@@ -62,10 +62,10 @@ The `trace` option mirrors the canonical TypeScript `true | false | object`
 handling: an explicit `false` (or `*bool` false) disables tracing; `true`
 enables every kind; a per-kind map (`map[string]any` or
 `map[string]bool`) enables tracing with the map merged over the all-true
-defaults — a partial map cannot turn other kinds off implicitly (set them
-`false` explicitly), matching the TS engine-side deep-merge of
+defaults, so a partial map cannot turn other kinds off implicitly (set
+them `false` explicitly), matching the TS engine-side deep-merge of
 `Debug.defaults`; and when the key is **absent** (or `opts` is `nil`) the
-value falls back to `Defaults["trace"]` (i.e. on). The kinds are the
+value falls back to `Defaults["trace"]`, which is on. The kinds are the
 TypeScript six: `step`, `rule`, `lex`, `parse`, `node`, `stack`.
 
 The `print` behaviour is exposed as the package function
@@ -74,7 +74,7 @@ concrete method that cannot be wrapped in place (the TS plugin reassigns
 `tabnas.use`), so later plugin loads must go through `debug.Use` to get
 the `USE:` log.
 
-Trace output is capturable: pass any `io.Writer` under `opts["out"]` and
+Trace output can be captured: pass any `io.Writer` under `opts["out"]` and
 the trace streams write there instead of `os.Stdout`.
 
 ### Rust
@@ -84,8 +84,8 @@ the trace streams write there instead of `os.Stdout`.
 | `print` | `bool` | Log `USE:` plus the full `describe` dump when a later plugin is loaded via `tabnas_debug::use_plugin`. |
 | `trace` | `Option<TraceKinds>` | Which parse events to log; `None` traces nothing. |
 
-`TraceKinds` is a struct of six `bool` fields — `step`, `rule`, `lex`,
-`parse`, `node`, `stack` — with `TraceKinds::all()` and
+`TraceKinds` is a struct of six `bool` fields (`step`, `rule`, `lex`,
+`parse`, `node`, `stack`) with `TraceKinds::all()` and
 `TraceKinds::none()` constructors. `DebugOptions::default()` is `print:
 true` with every kind on, matching `Debug.defaults`;
 `DebugOptions::quiet()` is the introspection-only setting (no `USE:`
@@ -97,9 +97,10 @@ Rust has no `out` option: the ENGINE owns the output sink
 lines and the `USE:` dump are written through it. Set that sink to
 capture them.
 
-Like Go, Rust exposes the `print` wrapper as a function —
-`tabnas_debug::use_plugin(&mut parser, plugin, options)` — because
-`Tabnas::use_plugin` is a concrete method, not a reassignable field.
+Like Go, Rust exposes the `print` wrapper as a function,
+`tabnas_debug::use_plugin(&mut parser, plugin, options)`, because
+`Tabnas::use_plugin` is a concrete method, not a field that can be
+reassigned.
 
 ## Defaults
 
@@ -113,9 +114,9 @@ Like Go, Rust exposes the `print` wrapper as a function —
 
 | Language | Form |
 |---|---|
-| TypeScript | `tn.debug.describe()` — method attached to the instance, returns `string` |
-| Go | `debug.Describe(j)` — package function taking the instance, returns `(string, error)` |
-| Rust | `tabnas_debug::describe(&parser)` — free function taking the instance, returns `String` |
+| TypeScript | `tn.debug.describe()`: method attached to the instance, returns `string` |
+| Go | `debug.Describe(j)`: package function taking the instance, returns `(string, error)` |
+| Rust | `tabnas_debug::describe(&parser)`: free function taking the instance, returns `String` |
 
 The Go form returns an `error` alongside the report to uphold the
 engine's no-panic guarantee: a malformed grammar spec (nil config, nil
@@ -146,9 +147,9 @@ can be diffed. The eight of them are the parity contract that
 
 | Language | Form |
 |---|---|
-| TypeScript | `tn.debug.model()` — returns `DebugModel` |
-| Go | `debug.Model(j)` — returns `(*DebugModel, error)` |
-| Rust | `tabnas_debug::model(&parser)` — returns `DebugModel` |
+| TypeScript | `tn.debug.model()`: returns `DebugModel` |
+| Go | `debug.Model(j)`: returns `(*DebugModel, error)` |
+| Rust | `tabnas_debug::model(&parser)`: returns `DebugModel` |
 
 All three return the same information as `describe()` / `Describe` as a
 typed, JSON-serialisable object: the token table (`tokens`), token sets
@@ -157,7 +158,7 @@ rule-reference graph (`graph`), lexer matchers (`lexer`), key config
 (`config`), plugins (`plugins`) and the ABNF text (`abnf`). All three
 export the full type set: `DebugModel`, `DebugTokenInfo`,
 `DebugTokenSet`, `DebugAltInfo`, `DebugRuleInfo`, `DebugRuleEdges`,
-`DebugLexMatcher`, `DebugConfigInfo`, `DebugPluginInfo` — the Go structs
+`DebugLexMatcher`, `DebugConfigInfo`, `DebugPluginInfo`. The Go structs
 carry JSON tags matching the TS field names, so serialised output is
 comparable across runtimes.
 
@@ -172,8 +173,8 @@ TS insertion order, and sorts tokens by tin and token sets by name
 because the Rust engine holds those unordered.
 
 The Go model's slice fields are always initialised, never left nil, so an
-empty section serialises as `[]` — matching TS — rather than `null`. Rust
-`Vec` fields are likewise always present, and absent optionals are
+empty section serialises as `[]`, matching TS, rather than `null`. Rust
+`Vec` fields are likewise always present, and absent `Option` fields are
 skipped rather than serialised as `null`.
 
 The Rust field names come from `serde` renames chosen to match the TS
@@ -186,7 +187,7 @@ grammar in the shared registry, sorted by name to absorb the documented
 ordering difference. The *instance-level* sections (`lexer`, `plugins`,
 `tag`) are outside that fixture: `lexer` is summarised in Go, the Go
 fixtures need not load the debug plugin (in Go, `Describe`/`Model`/`Abnf`
-are package functions), and `tag` depends on the engine version — see
+are package functions), and `tag` depends on the engine version; see
 below.
 
 ### Engine-version note: the unset instance `tag`
@@ -199,8 +200,8 @@ empty, so an untagged instance rendered `tag: -` in TS and a bare
 That is **fixed in the engine**: `github.com/tabnas/parser/go` now
 exports `DefaultTag = "-"` and `Make` applies it to an unset
 `Options.Tag`, so both runtimes report `-`. Verified against the sibling
-engine checkout (`cd go && go test ./...` with the repo `go.work`
-active).
+engine checkout (`cd go && go test ./...` with the repository's
+`go.work` active).
 
 The fix is not yet in a published engine release, so the Go suite's two
 resolutions **disagree** on this one value:
@@ -222,7 +223,7 @@ Under tracing, each event prints one line to the instance's console
 own debug sink, `parser.options.debug.output` (Rust). Every runtime
 begins each parse with a `========= TRACE ==========` banner and logs
 the enabled kinds (`step`, `rule`, `lex`, `parse`, `node`, `stack`);
-most lines lead with the parse state — upcoming source, the token window
+most lines lead with the parse state: upcoming source, the token window
 `[t0 t1]~[tin0 tin1]`, and the parse depth. Rust logs five of the six:
 `step` has no engine hook.
 
@@ -234,7 +235,7 @@ lines omit the matcher name, because the Go engine does not expose them.
 Rust derives them from the engine's typed subscribers: `lex` from
 `subscribe_lex`, `rule` and `stack` from `subscribe_rules` (the latter
 reading the context's rule stack), and `parse` and `node` from
-`subscribe_rule_done` — which carries the matched alternate, so Rust
+`subscribe_rule_done`, which carries the matched alternate, so Rust
 `parse` lines DO report the alternate's push/replace/back/groups, though
 still not an alt index. The banner is written from a parse-prepare hook,
 as in Go. Output goes to the engine's own debug sink.
@@ -242,7 +243,7 @@ as in Go. Output goes to the engine's own debug sink.
 **Rust `step` never fires.** In TypeScript the engine itself calls
 `ctx.log('step', …)` once per parse step; the Rust engine emits no such
 event and has no `ctx.log`. The option is kept so the kind names stay in
-step across runtimes, and selecting it is accepted — but nothing is
+step across runtimes, and selecting it is accepted, but nothing is
 logged for it, and a selection of `step` ALONE installs no tracing at
 all, not even the per-parse banner.
 
@@ -256,8 +257,8 @@ names and function-valued `<F>` targets), the `ALTS` `A`/`C`/`H`
 presence flags, declarative-condition (`CD`) rendering, function-valued
 push/replace (`p=<F>` / `r=<F>`), and per-position multi-token sets all
 mirror `debug.ts`. Tracing is configurable
-(`true | false | per-kind map | absent`, honouring `Defaults["trace"]`)
-and capturable (`opts["out"]`).
+(`true | false | per-kind map | absent`, honouring `Defaults["trace"]`),
+and its output can be captured (`opts["out"]`).
 
 The remaining differences are imposed by the Go engine's public API:
 
@@ -284,18 +285,18 @@ The remaining differences are imposed by the Go engine's public API:
    only when registered via `Tabnas.SetPluginOptions`.
 5. **`ALTS` condition counter map (`CN=`).** The canonical TS renders the
    normalised condition's counter map as `CN=` (from `a.c.n`). The Go
-   engine has no equivalent `AltSpec` field — it folds counter conditions
-   into the `C` function rather than retaining a separate map — so `CN=`
+   engine has no equivalent `AltSpec` field: it folds counter conditions
+   into the `C` function rather than retaining a separate map, so `CN=`
    is not emitted. The presence of a condition is still flagged by `C`,
    and declarative conditions are rendered via `CD=`.
 6. **Token ordering.** The Go engine exposes token sets through Go maps
-   (e.g. `IGNORE` is a `map[Tin]bool`) and custom token names through
-   `cfg.TinNames` (a `map[Tin]string`), neither of which preserves
-   insertion order. Exact TS insertion-order parity is therefore not
-   possible without engine changes; the Go port instead orders tokens and
-   token-set members by tin (built-in tins in their canonical
-   `TinBD..TinCA` order, then custom tins ascending) so the output is
-   deterministic and diffable.
+   (for example, `IGNORE` is a `map[Tin]bool`) and custom token names
+   through `cfg.TinNames` (a `map[Tin]string`), neither of which
+   preserves insertion order. Exact TS insertion-order parity is
+   therefore not possible without engine changes; the Go port instead
+   orders tokens and token-set members by tin (built-in tins in their
+   canonical `TinBD..TinCA` order, then custom tins ascending) so the
+   output is deterministic and diffable.
 
 
 ## Parity and remaining differences: Rust vs. canonical TypeScript
@@ -307,16 +308,17 @@ imposed by the Rust engine's public API and by Rust's type system:
 
 1. **Free functions, not instance methods.** `describe(&parser)`,
    `model(&parser)` and `abnf(&parser)` take the instance, exactly as
-   Go's package functions do — Rust cannot add methods to a type it does
+   Go's package functions do: Rust cannot add methods to a type it does
    not own. Unlike Go they are **infallible**: the Go signatures return
    `(value, error)` because the Go engine's accessors can fail, while the
    Rust accessors cannot, so there is no error to surface.
 2. **`print` requires `tabnas_debug::use_plugin`.** `Tabnas::use_plugin`
-   is a concrete method, not a reassignable field, so the TS `use()`
-   wrapping is a free function here too. A plugin installed directly
-   through `Tabnas::use_plugin` does not trigger the `USE:` dump. The
-   plugin records its `print` setting as an instance *decoration*
-   (`debug.print`), which is how the wrapper knows what to do.
+   is a concrete method, not a field that can be reassigned, so the TS
+   `use()` wrapping is a free function here too. A plugin installed
+   directly through `Tabnas::use_plugin` does not trigger the `USE:`
+   dump. The plugin records its `print` setting as an instance
+   *decoration* (`debug.print`), which is how the wrapper knows what to
+   do.
 3. **`step` never fires.** The Rust engine has no `ctx.log` and emits no
    per-step event, so the `step` kind is accepted for option-name parity
    and logs nothing. See "Trace output" above.
@@ -331,7 +333,7 @@ imposed by the Rust engine's public API and by Rust's type system:
    writes both trace lines and the `USE:` dump through it. Capture by
    setting that sink, rather than by passing a writer to the plugin.
 6. **Ordering.** Rules keep the engine's `IndexMap` order, which IS the
-   TypeScript insertion order — Rust matches TS here where Go cannot.
+   TypeScript insertion order, so Rust matches TS here where Go cannot.
    Tokens are ordered by tin and token sets by name, because the Rust
    engine holds those in unordered maps; alt counter maps are sorted for
    the same reason.
@@ -346,12 +348,12 @@ imposed by the Rust engine's public API and by Rust's type system:
 8. **`ALTS` condition rendering.** The TS `CN=` (the normalised
    condition's counter map) has no Rust counterpart, as it has no Go one.
    Rust's declarative conditions are path/op/value comparisons rather
-   than TS's `{n, d}` shape, and render as `CD=` entries; a callback
-   condition shows only as the `C` flag, as everywhere.
+   than the TypeScript `{n, d}` shape, and render as `CD=` entries; a
+   callback condition shows only as the `C` flag, as everywhere.
 9. **The shared-fixture loader is hand-written.** `@tabnas/support` has
    no Rust half, so `rs/tests/common/spec.rs` implements the loader. It
    is the one loader that CAN drift from the other two; `test/AGENTS.md`
-   pins the codec it has to keep.
+   pins the format it has to keep.
 10. **Fixed token names carry a `#` prefix.** `Tabnas::token_with_source`
     normalises a fixed token's name to `#…`, so a token declared `Ta`
     reports as `#Ta` in `TOKENS`, in `ALTS` sequences and in
@@ -362,7 +364,7 @@ imposed by the Rust engine's public API and by Rust's type system:
 11. **Re-installing updates the trace selection rather than stacking it.**
     The Rust engine accumulates subscribers and parse-prepare hooks, so
     the plugin registers its callbacks once per instance and has later
-    installs replace a shared selection — including with `trace: None`,
+    installs replace a shared selection, including with `trace: None`,
     which turns tracing off. TypeScript needs the same care for its own
     `use()` wrapper (`__debugUseWrapped`), and for the same reason:
     deriving a child re-runs the parent's plugins.
@@ -373,7 +375,7 @@ imposed by the Rust engine's public API and by Rust's type system:
 `abnf()` had two cases that emitted output no conforming ABNF tool
 accepts. Both were surfaced by an automated review of the Rust port
 (tabnas/debug#37), verified against `ts/src/debug.ts` as canonical
-behaviour rather than port defects, and fixed in tabnas/debug#45 — in
+behaviour rather than port defects, and fixed in tabnas/debug#45: in
 TypeScript first, then Go and Rust, pinned by the shared `collide`
 fixture that all three run. They are kept here because the old output
 still turns up in grammars captured before the fix.
@@ -388,9 +390,10 @@ still turns up in grammars captured before the fix.
 
 2. **An unrecognised match regex emitted a legend entry that was only a
    comment.** The fallback was `T = ; /…/`; `;` starts an ABNF comment
-   that runs to end of line, so the rule was left with no elements — not
-   merely non-round-tripping, but unparseable, and one such token
-   invalidated the whole grammar rather than just that rule. It now emits
-   an RFC 5234 §4 prose-val, `T = <regex /…/>`, which is a real element.
+   that runs to end of line, so the rule was left with no elements. That
+   made it not merely non-round-tripping but impossible to parse, and one
+   such token invalidated the whole grammar rather than just that rule. It
+   now emits an RFC 5234 §4 prose-val, `T = <regex /…/>`, which is a real
+   element.
 
 All three runtimes emit the `collide` fixture byte-for-byte identically.

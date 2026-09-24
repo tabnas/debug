@@ -89,13 +89,13 @@ At this point the plugin is available but quiet.
 
 Ask the plugin what the parser knows.
 
-TypeScript — the plugin attached a `describe` method to the instance:
+In TypeScript, the plugin attached a `describe` method to the instance:
 
 ```js
 console.log(tn.debug.describe())
 ```
 
-Go — `Describe` is a package function you pass the instance to. It
+In Go, `Describe` is a package function you pass the instance to. It
 returns `(string, error)`; the error is `nil` for a well-formed instance:
 
 ```go
@@ -106,8 +106,8 @@ if err != nil {
 fmt.Println(report)
 ```
 
-Rust — `describe` is a free function too, and an infallible one, because
-the Rust engine's accessors cannot fail:
+In Rust, `describe` is a free function too, and an infallible one,
+because the Rust engine's accessors cannot fail:
 
 ```rust
 println!("{}", tabnas_debug::describe(&parser));
@@ -118,7 +118,7 @@ Run it. You will see a report divided into eight labelled sections:
 `ABNF`. Each lists part of the parser's
 active configuration. The engine ships no grammar of its own, so a bare
 instance shows little; add tokens and rules (or load a grammar plugin)
-and they appear here. Skim it — the point is that the grammar is visible.
+and they appear here. Skim it: the point is that the grammar is visible.
 
 ## 3. Turn on tracing
 

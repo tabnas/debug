@@ -5,7 +5,7 @@ specific input.
 
 ## TypeScript
 
-1. Use a fresh instance for the traced run — tracing is wired up when the
+1. Use a fresh instance for the traced run: tracing is wired up when the
    plugin loads.
 
 2. Load the plugin with tracing on and printing off:
@@ -25,7 +25,7 @@ specific input.
    ```
 
 4. Read the lines: the leading tag (`lex`, `rule`, `parse`, `node`,
-   `stack`) tells you the event kind. See the
+   `stack`) names the event kind. See the
    [Reference](../reference.md#trace-output) for the fields.
 
 ## Go
@@ -39,8 +39,8 @@ specific input.
    ```
 
 2. Trace lines go to stdout (pass an `io.Writer` under `"out"` to
-   capture them). You get the same kinds as TypeScript — `step`, `stack`,
-   `rule`, `lex`, `parse`, `node` — with matching line shapes; see the
+   capture them). You get the same kinds as TypeScript (`step`, `stack`,
+   `rule`, `lex`, `parse`, `node`) with matching line shapes; see the
    [trace output reference](../reference.md#trace-output) for the small
    remaining differences (no alt index on `parse` lines, no matcher name
    on `lex` lines).
@@ -78,7 +78,7 @@ specific input.
   default, or to the `io.Writer` passed as `opts["out"]`. Rust trace
   output goes to `parser.options.debug.output`, stderr by default.
 - If you see no output, confirm tracing is enabled and that at least one
-  kind that the runtime can emit is on — see
+  kind that the runtime can emit is on; see
   [Choose which events to trace](select-trace-kinds.md). In Rust a
   selection of `step` alone installs no tracing at all, not even the
   per-parse banner.

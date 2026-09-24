@@ -10,7 +10,7 @@ Any kind set to a falsy value is suppressed. The recognised kinds are
 
 Trace only lexing and rule events. The engine deep-merges
 `Debug.defaults` (all kinds on) with your object, so a partial map cannot
-turn other kinds off implicitly — disable them explicitly:
+turn other kinds off implicitly. Disable them explicitly:
 
 ```js
 tn.use(Debug, {
@@ -28,7 +28,7 @@ tn.use(Debug, {
 })
 ```
 
-Turn tracing off entirely — pass `false`:
+Turn tracing off entirely by passing `false`:
 
 ```js
 tn.use(Debug, { print: false, trace: false })
