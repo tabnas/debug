@@ -89,7 +89,7 @@ cargo test --all-targets
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Or, from the repository root, `make test-rs` runs the tests and clippy.
+Or, from the repository root, `make test-rs` runs the tests and Clippy.
 There is only one resolution here, always the sibling engine, unlike
 the Go module's pinned/workspace pair.
 
