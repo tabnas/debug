@@ -21,7 +21,7 @@ specific input.
 3. Parse your input; the trace prints as it runs:
 
    ```js
-   tn('{ "a": 1 }')
+   tn.parse('{ "a": 1 }')
    ```
 
 4. Read the lines: the leading tag (`lex`, `rule`, `parse`, `node`,
@@ -77,8 +77,9 @@ specific input.
   capture it, override that console. Go trace output goes to stdout by
   default, or to the `io.Writer` passed as `opts["out"]`. Rust trace
   output goes to `parser.options.debug.output`, stderr by default.
-- If you see no output, confirm tracing is enabled and that at least one
-  kind that the runtime can emit is on; see
-  [Choose which events to trace](select-trace-kinds.md). In Rust a
-  selection of `step` alone installs no tracing at all, not even the
-  per-parse banner.
+- If you see no output, or only the banner, confirm tracing is enabled
+  and that at least one kind that the runtime can emit is on; see
+  [Choose which events to trace](select-trace-kinds.md). Confirm too that
+  the instance has a grammar: the engine ships none, so a bare instance
+  has no events to log. In Rust a selection of `step` alone installs no
+  tracing at all, not even the per-parse banner.

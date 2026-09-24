@@ -187,8 +187,7 @@ grammar in the shared registry, sorted by name to absorb the documented
 ordering difference. The *instance-level* sections (`lexer`, `plugins`,
 `tag`) are outside that fixture: `lexer` is summarised in Go, the Go
 fixtures need not load the debug plugin (in Go, `Describe`/`Model`/`Abnf`
-are package functions), and `tag` depends on the engine version; see
-below.
+are package functions), and `tag` has not been added; see below.
 
 ### Engine-version note: the unset instance `tag`
 
@@ -199,22 +198,12 @@ empty, so an untagged instance rendered `tag: -` in TS and a bare
 
 That is **fixed in the engine**: `github.com/tabnas/parser/go` now
 exports `DefaultTag = "-"` and `Make` applies it to an unset
-`Options.Tag`, so both runtimes report `-`. Verified against the sibling
-engine checkout (`cd go && go test ./...` with the repository's
-`go.work` active).
+`Options.Tag`, so both runtimes report `-`. The engine release that
+`go/go.mod` requires carries the fix, so `Model(j).Tag` is `-` under
+`GOWORK=off` and under a workspace alike.
 
-The fix is not yet in a published engine release, so the Go suite's two
-resolutions **disagree** on this one value:
-
-| Resolution | Engine | Unset tag |
-|---|---|---|
-| `GOWORK=off` (`make test`, `make test-go`) | published `parser/go v0.6.1` | `""` |
-| workspace on (plain `go test`; what CI generates) | sibling `parser/go` `main` | `"-"` |
-
-A shared fixture has to pass under both, so `tag` is left out of
-`model.tsv` until `go/go.mod` moves past the alignment. Once the engine
-bump lands, both resolutions report `-`, `tag` can join `rules`/`graph`
-in the fixture, and this note can go.
+`tag` is still left out of `model.tsv`, although nothing now stops it
+joining `rules`/`graph` in the fixture. Once it does, this note can go.
 
 ## Trace output
 

@@ -122,46 +122,60 @@ and they appear here. Skim it: the point is that the grammar is visible.
 
 ## 3. Turn on tracing
 
-Tracing logs what the parser does as it parses.
+Tracing logs what the parser does as it parses. The engine ships no
+grammar, so a parse on a bare instance has no events to log. Give the
+traced instance one token, `#TA`, and one rule, `top`, that matches it:
 
 TypeScript:
 
 ```js
-const traced = new Tabnas()
+const traced = new Tabnas({ fixed: { token: { '#TA': 'a' } }, rule: { start: 'top' } })
+traced.rule('top', (rs) => rs.open([{ s: ['#TA'] }]))
 traced.use(Debug, { print: false, trace: true })
-traced('a:1')
+traced.parse('a')
 ```
 
 Go:
 
 ```go
+ta := j.Token("#TA", "a")
+j.Rule("top", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+	rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{ta}}})
+})
+j.SetOptions(tabnas.Options{Rule: &tabnas.RuleOptions{Start: "top"}})
 j.Use(debug.Debug, map[string]any{"trace": true})
-j.Parse("a:1")
+j.Parse("a")
 ```
 
 Rust:
 
 ```rust
 let mut traced = Tabnas::new();
+traced.options.rule.start = "top".into();
+let a = traced.token_with_source("#TA", "a");
+traced.define_rule("top", move |spec| {
+    spec.add_open(tabnas::AltSpec { s: vec![vec![a]], ..Default::default() });
+});
 apply(&mut traced, DebugOptions::default().with_print(false))?;
-traced.parse("a:1")?;
+traced.parse("a")?;
 ```
 
 Run it. You will see one line per parse event, tagged by kind:
 `step`, `stack`, `rule` (each rule opening and closing), `lex`
 (each token produced), `parse` (the alternate match result) and `node`
-(the node built so far). Each line shows where in the source the parser
-is and what it decided. Rust emits five of the six: the Rust engine has
-no per-step event, so `step` is accepted as an option name and logs
-nothing. Rust trace lines go to the engine's own debug sink, stderr by
-default, rather than to a console the plugin owns.
+(the node built so far). TypeScript prints a `step` line as the bare
+step number, such as `0:`, without the tag. Each line shows where in the
+source the parser is and what it decided. Rust emits five of the six:
+the Rust engine has no per-step event, so `step` is accepted as an
+option name and logs nothing. Rust trace lines go to the engine's own
+debug sink, stderr by default, rather than to a console the plugin owns.
 
 ## 4. Read one trace line
 
 Find a `rule` line. It shows the rule name with its instance number,
-whether it is opening (`o`) or closing (`c`), the parse depth, and the
-node built so far. Follow the lines top to bottom and you can watch the
-parser descend into the input and come back out.
+whether it is opening or closing (`OPEN` or `CLOSE`, written `Open` and
+`Close` in Rust), and the parse depth. Follow the lines top to bottom
+and you can watch the parser descend into the input and come back out.
 
 ## What you have learned
 
