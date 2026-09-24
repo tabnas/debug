@@ -631,9 +631,7 @@ reading debug output must treat every quoted fragment as hostile text.
 
 `.github/workflows/ci.yml` is a thin **caller** of the org-shared
 reusable workflow `tabnas/.github/.github/workflows/polyglot-ci.yml@main`
-(it replaced a local `build.yml`; a maintainer promotes changes to it via
-`tabnas/admin`, because session credentials cannot write
-`.github/workflows/*`). It passes only the sibling wiring:
+(it replaced a local `build.yml`). It passes only the sibling wiring:
 
 ```yaml
 deps:        "parser support bnf abnf"
@@ -658,6 +656,16 @@ clones nothing, so the sibling `../parser` checkout has to be there
 already. Run `make test-rs`, or `ci/rust/run.sh` for what CI will say,
 before pushing a change that touches `rs/`, `ts/src/debug.ts`,
 `ts/package.json` or `test/spec/`.
+
+To change any of these workflows, edit `.github/workflows/` in a reviewed
+pull request: session credentials can push workflow changes (admin
+`DECISIONS.md` ADR-8, as amended 2026-09-24). They cannot push tags, so a
+maintainer pushes any tag a tag-triggered workflow needs.
+A workflow with an admin template, in `rollout/workflows/debug__<file>`
+or, for the stamped `clib.yml` and `clib-release.yml`, in
+`tasks/clib-template/`, changes in that template as well, or admin
+`scripts/verify.sh` reports it as drift and the next rollout or restamp
+writes the template back; `ci/README.md` lists which and says how.
 
 ## Tests mirror each other
 
