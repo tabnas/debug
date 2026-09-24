@@ -74,7 +74,7 @@ parser.options.debug.output = Some(std::sync::Arc::new(|line: &str| {
 
 - [Tutorial](doc/tutorial.md). Zero to a working inspection, step by step.
 - [How-to guide](doc/guide.md). Focused recipes.
-- [Reference](doc/reference.md). The exact exports, options and output.
+- [Reference](doc/reference.md). The exact exports, options, and output.
 - [Concepts](doc/concepts.md). How it works and how it differs from the
   TypeScript version.
 
@@ -89,7 +89,7 @@ cargo test --all-targets
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Or, from the repository root, `make test-rs` runs the tests and clippy.
+Or, from the repository root, `make test-rs` runs the tests and Clippy.
 There is only one resolution here, always the sibling engine, unlike
 the Go module's pinned/workspace pair.
 

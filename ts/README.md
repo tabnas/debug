@@ -57,7 +57,7 @@ The grammar-structure fields round-trip through `JSON.stringify`.
 - [Tutorial](doc/tutorial.md). Zero to a working inspection, step by step.
 - [How-to guide](doc/guide.md). Focused recipes (diff grammars, capture
   traces, round-trip ABNF).
-- [Reference](doc/reference.md). The exact exports, options and types.
+- [Reference](doc/reference.md). The exact exports, options, and types.
 - [Concepts](doc/concepts.md). How it works and why.
 
 The Go port lives in [`../go`](../go) and tracks this implementation.

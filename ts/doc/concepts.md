@@ -60,21 +60,21 @@ output stays free to evolve its layout because tests target the model.
 
 The model is a faithful, structured snapshot of the grammar:
 
-- **tokens / tokenSets**. The token table (tin, name, fixed literal) and
-  the named token sets (`IGNORE`, `VAL`, `KEY`, …).
-- **rules**. Every rule, with its `open` and `close` alternates. Each
+- **`tokens` / `tokenSets`**. The token table (tin, name, fixed
+  literal) and the named token sets (`IGNORE`, `VAL`, `KEY`, …).
+- **`rules`**. Every rule, with its `open` and `close` alternates. Each
   alternate (`DebugAltInfo`) records its lookahead token sequence, any
   push/replace target, backtrack, counters, group tags, and whether it
   carries an action / condition / modifier.
-- **graph**. The rule-reference graph: for each rule, the distinct rules
+- **`graph`**. The rule-reference graph: for each rule, the distinct rules
   it can push into or replace with, split by open/close phase. This is the
   alternates' targets de-duplicated: a quick map of how the grammar's
   rules connect.
-- **lexer**. The ordered list of lexer matchers.
-- **config**. The start rule, the finish flag, the safe-key setting, and
+- **`lexer`**. The ordered list of lexer matchers.
+- **`config`**. The start rule, the finish flag, the safe-key setting, and
   which built-in lexers are enabled.
-- **plugins**. The applied plugins and their options.
-- **abnf**. The grammar as ABNF text.
+- **`plugins`**. The applied plugins and their options.
+- **`abnf`**. The grammar as ABNF text.
 
 The `rules` and `graph` fields are two views of the same thing: `rules`
 is the full alternate detail, `graph` is the connectivity summary derived

@@ -59,7 +59,7 @@ func main() {
 
 - [Tutorial](doc/tutorial.md). Zero to a working inspection, step by step.
 - [How-to guide](doc/guide.md). Focused recipes.
-- [Reference](doc/reference.md). The exact exports, options and output.
+- [Reference](doc/reference.md). The exact exports, options, and output.
 - [Concepts](doc/concepts.md). How it works and how it differs from the
   TypeScript version.
 

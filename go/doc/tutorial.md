@@ -186,7 +186,7 @@ The trace mirrors the TypeScript kinds: `step` (loop counter), `stack`
 (the rule stack and partial nodes), `rule` (a rule opening or closing),
 `lex` (one line per token), `parse` (the alternate match result) and
 `node` (the node built so far). Most lines lead with the upcoming source,
-the token window and the parse depth. Read them top to bottom to watch
+the token window, and the parse depth. Read them top to bottom to watch
 the parser descend into the input and come back out. Pass a per-kind map
 under `"trace"` to select individual streams; see the
 [guide](guide.md).
