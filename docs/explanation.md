@@ -1,7 +1,7 @@
 # Explanation: how the plugin works
 
 This page explains how `@tabnas/debug` hooks into the parser and why it
-is shaped the way it is. It is background, not instructions — for those,
+is shaped the way it is. It is background, not instructions; for those,
 see the [how-to guides](README.md).
 
 ## A plugin, not a fork
@@ -15,7 +15,7 @@ it.
 
 This is also why the plugin can introspect so much. Running as a plugin
 (TypeScript) or through the engine's exported accessors (Go and Rust), it
-can read the token table, the rule specs, and the lexer matchers — the
+can read the token table, the rule specs, and the lexer matchers: the
 things you need to understand a grammar but that the normal parse API
 does not surface.
 
@@ -23,28 +23,28 @@ does not surface.
 
 The plugin offers two things you can take separately:
 
-1. **Description** — `describe()` (TypeScript), `Describe(j)` (Go) or
+1. **Description**. `describe()` (TypeScript), `Describe(j)` (Go) or
    `describe(&parser)` (Rust) walks
    the live configuration and renders it as text. It is a pure read:
    call it whenever, it changes nothing. Reach for it when you want to
    know *what grammar the parser currently has*. Outside TypeScript it is
    a free function, so it needs no plugin installed to call.
 
-2. **Tracing** — when enabled, the plugin logs what the parser does as it
+2. **Tracing**. When enabled, the plugin logs what the parser does as it
    runs. Reach for it when you want to know *what the parser did on this
    input*.
 
 A third feature, **printing**, dumps the grammar after each later plugin
 load. In TypeScript the plugin wraps the instance's `use` in place;
 neither the Go engine's `Use` nor Rust's `Tabnas::use_plugin` is a
-reassignable field, so both ports expose the wrapped form as a function,
-`debug.Use(j, plugin, opts...)` and
+field that can be reassigned, so both ports expose the wrapped form as a
+function, `debug.Use(j, plugin, opts...)` and
 `tabnas_debug::use_plugin(&mut parser, plugin, options)`. Later loads
 made through it print the `USE:` line and the grammar dump.
 
 ## How tracing is installed
 
-Tracing is wired when the plugin loads, not toggled per parse — so enable
+Tracing is wired when the plugin loads, not toggled per parse, so enable
 it on the instance you intend to trace. The six kind names are the same
 everywhere: `step`, `rule`, `lex`, `parse`, `node`, `stack`.
 
@@ -71,7 +71,7 @@ everywhere: `step`, `rule`, `lex`, `parse`, `node`, `stack`.
 
 The `describe` sections use a fixed layout with stable, identical headers
 across all three implementations. This is intentional: stable text can be
-diffed — before vs. after a change, or one language against the other.
+diffed: before vs. after a change, or one language against the other.
 The format is part of the contract, not an accident of printing: the
 eight headers are pinned byte-for-byte by the shared
 `test/spec/sections.tsv` fixture that every runtime runs.
@@ -81,9 +81,9 @@ eight headers are pinned byte-for-byte by the shared
 The TypeScript implementation is the source of truth. The Go and Rust
 ports exist to make the same debugging available to those users, and they
 track the TypeScript behaviour rather than evolving on their own. Where
-an engine genuinely differs — the function form of the `print` option,
+an engine genuinely differs (the function form of the `print` option,
 `parse` lines without an alt index, a summarised `LEXER` section, Go's
-symbol-derived plugin names, Rust's silent `step` kind — the gaps are a
+symbol-derived plugin names, Rust's silent `step` kind), the gaps are a
 consequence of the engine APIs, and they are written down in the
 reference, per port
 ([Go](reference.md#parity-and-remaining-differences-go-vs-canonical-typescript),

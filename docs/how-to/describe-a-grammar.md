@@ -1,7 +1,7 @@
 # How to describe a grammar
 
-Goal: get a readable dump of a parser's active configuration — its
-tokens, rules, alternates, lexer matchers and loaded plugins — without
+Goal: get a readable dump of a parser's active configuration (its
+tokens, rules, alternates, lexer matchers and loaded plugins) without
 running a parse.
 
 ## TypeScript
@@ -22,10 +22,10 @@ running a parse.
 
 ## Go
 
-`Describe` is a package function — you do not need to load the plugin to
-call it. It returns `(string, error)`: unlike the TypeScript
+`Describe` is a package function, so you do not need to load the plugin
+to call it. It returns `(string, error)`: unlike the TypeScript
 `describe()`, the Go form never panics, returning an `"internal"`-code
-error instead if the grammar spec is unrenderable:
+error instead if the grammar spec cannot be rendered:
 
 ```go
 j := tabnas.Make()
@@ -65,6 +65,6 @@ notes where the Go and Rust output is summarised relative to TypeScript.
 
 Because the section order and headers are stable and identical across
 all three implementations, you can capture the output before and after a
-change — or one language against the other — and diff the strings to see
+change, or one language against the other, and diff the strings to see
 what differs. The shared `test/spec/sections.tsv` fixture is what keeps
 that true: every runtime runs it, over the same named grammars.

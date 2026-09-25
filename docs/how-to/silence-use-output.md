@@ -6,7 +6,7 @@ plugin is loaded, while keeping `describe()` and tracing available.
 ## Why this happens
 
 When `print` is enabled, every later plugin load prints the current
-grammar — in TypeScript because the plugin wraps the instance's `use`
+grammar: in TypeScript because the plugin wraps the instance's `use`
 method, in Go for loads made through `debug.Use(j, plugin, opts...)`,
 and in Rust for loads made through
 `tabnas_debug::use_plugin(&mut parser, plugin, options)`. Neither the Go
@@ -37,7 +37,7 @@ introspection with neither the dump nor tracing, Rust has
 
 ## Get the description on demand instead
 
-With printing off, call `describe` yourself when you want it — see
+With printing off, call `describe` yourself when you want it; see
 [Describe a grammar](describe-a-grammar.md).
 
 ## Note on load order
