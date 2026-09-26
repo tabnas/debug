@@ -86,7 +86,40 @@ var _ = &sharedMu // referenced only by opt-in constructs
 // ignore it; a row that defines options must validate it here, since
 // nothing upstream does.
 func newParser(opts string) (parseFn, error) {
-	off := false; tn := host.Make(host.Options{Color: &host.ColorOptions{Active: &off}}); gs, err := host.GrammarSpecFromJSON([]byte(opts)); if err != nil { return nil, &host.TabnasError{Code: "grammar", Detail: "unreadable spec: " + err.Error()} }; if err := tn.Grammar(gs); err != nil { return nil, err }; start := tn.Config().RuleStart; if start == "" { start = "val" }; if tn.RSM()[start] == nil { return nil, &host.TabnasError{Code: "grammar", Detail: "spec installs no start rule " + start + ", so no input could be validated against it"} }; var out strings.Builder; if err := tn.Use(plug.Debug, map[string]any{"print": false, "trace": true, "out": &out}); err != nil { return nil, err }; run := func(src string) (any, error) { out.Reset(); v, err := tn.Parse(src); if err != nil { return nil, err }; return map[string]any{"value": v, "trace": out.String()}, nil }; out.Reset(); _, _ = tn.Parse(" "); if !strings.Contains(out.String(), "TRACE") { panic("debug: canary parse produced no trace") }; return run, nil
+	off := false
+	tn := host.Make(host.Options{Color: &host.ColorOptions{Active: &off}})
+	gs, err := host.GrammarSpecFromJSON([]byte(opts))
+	if err != nil {
+		return nil, &host.TabnasError{Code: "grammar", Detail: "unreadable spec: " + err.Error()}
+	}
+	if err := tn.Grammar(gs); err != nil {
+		return nil, err
+	}
+	start := tn.Config().RuleStart
+	if start == "" {
+		start = "val"
+	}
+	if tn.RSM()[start] == nil {
+		return nil, &host.TabnasError{Code: "grammar", Detail: "spec installs no start rule " + start + ", so no input could be validated against it"}
+	}
+	var out strings.Builder
+	if err := tn.Use(plug.Debug, map[string]any{"print": false, "trace": true, "out": &out}); err != nil {
+		return nil, err
+	}
+	run := func(src string) (any, error) {
+		out.Reset()
+		v, err := tn.Parse(src)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"value": v, "trace": out.String()}, nil
+	}
+	out.Reset()
+	_, _ = tn.Parse(" ")
+	if !strings.Contains(out.String(), "TRACE") {
+		panic("debug: canary parse produced no trace")
+	}
+	return run, nil
 }
 
 // reply marshals a result document. Marshalling cannot fail for the
