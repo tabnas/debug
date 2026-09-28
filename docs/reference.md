@@ -432,19 +432,30 @@ only until the other two catch up. What the Rust emitter does:
    are both epsilon. (The canonical still tests "`s` non-empty, or `p`,
    or `r`", which is how the entry and the peek were counted.)
 2. **The self-replace entry is skipped** when rendering its own rule: it
-   is bookkeeping, not syntax.
+   is bookkeeping, not syntax. Every other replace with the rule itself
+   is content, as before: the close `{ s: A, b: 1, r: rule }` after an
+   open that consumed `A` is the `[ rule ]` of `rule = A [ rule ]`.
 3. **A rule with such an entry is a loop**, decided by shape rather than
-   by name, and is rendered wherever it is referenced as a repetition of
-   its iteration: `*A` and `*"a"` when the iteration is one element,
-   `*( a b )` otherwise, where the iteration is the ` / `-joined
-   rendering of the continue alternatives. A terminal continue renders
+   by name, and the guard is part of the shape: the entry consumes
+   nothing, pushes nothing, replaces the rule with itself, carries the
+   guard `n.rep == 0`, and sets that counter to 1. A user rule's own
+   non-consuming self-replace, a guarded or counted state transition
+   without that guard, is not a loop and renders as a reference to the
+   rule, as it always did. The helpers of a loop `H` are the rules named
+   `H$…` and nothing else it reaches: a kept production inside the
+   iteration, such as an old push-chain star, stays a reference by name
+   with its own production. The loop is rendered wherever it is
+   referenced as a repetition of its iteration: `*A` and `*"a"` when the
+   iteration is one element, `*( a b )` otherwise, where the iteration
+   is the ` / `-joined rendering of the continue alternatives. A
+   terminal continue renders
    the token it consumes; a ref continue renders `H$alt0`'s pushed item
    (inlined when foldable) followed by its close continuation, and the
    back edges (`r: H$alt0$step1`, then `r: H`) render nothing. `H`,
    `H$alt0` and `H$alt0$step1` are never productions of their own. A
    `_plus` helper over a loop folds too, and is written back as the
    `1*A` it was compiled from (a `_rep` helper as `2*A`): element by
-   element it is `A *A`, the same language, but the abnf crate compiles
+   element it is `A *A`, the same language, but the `abnf` crate compiles
    `A *A` and `1*A` to different recognisers, and where `A` is nullable
    the recompiled `A *A` rejects inputs the original accepts. A loop
    that is a USER rule keeps its production, whose body is the
@@ -454,9 +465,10 @@ only until the other two catch up. What the Rust emitter does:
    name it embeds. A repetition's helper is named after its item: a star
    over an optional is `_gen3_star__gen2_opt__gen1_group`, and its
    iteration helpers carry the whole of that name. The canonical decides
-   the `[ … ]` wrap by a substring test for `_opt`, which is harmless
-   there (those names are never inlined) and, once the loop inlines
-   them, wrapped the loop and its step as options too: `*[ [ T ] [  ] ]`,
+   the `[ … ]` wrap by a test for `_opt` anywhere in the name, which is
+   harmless there (those names are never inlined) and, once the loop
+   renders them inline, wrapped the loop and its step as options too:
+   `*[ [ T ] [  ] ]`,
    with an empty option RFC 5234 does not allow, where `*[ T ]` was
    meant.
 5. **The old shape renders exactly as before.** A push-chain `_star`,
@@ -472,7 +484,11 @@ The shapes are pinned by `rs/tests/abnf_test.rs` (`rep = *"a"`,
 `top = 1*( "a" "b" )`, `top = 1*( "a" / "b" )`, hand-built from
 the compiler's output because the emitter must never gain an ABNF
 dependency, even in a test), which check the emitted text is RFC 5234
-(no dangling `/`, legal rule names). No shared `test/spec` fixture pins
+(no dangling `/`, legal rule names). Three more pin what the shape
+excludes: a user rule's unguarded self-replace stays `st = st / A / B`,
+a guarded close continuation stays `one = A [ one ]`, and an old
+push-chain star inside a loop's group stays a kept production,
+`top = *( B r-gen1-star-A C )`. No shared `test/spec` fixture pins
 them yet: all three runtimes run those, and two do not render the loop
 yet. When TypeScript and Go follow, the shapes move to `test/spec` and
 this section becomes history like the one above it.

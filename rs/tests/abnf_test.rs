@@ -1218,3 +1218,193 @@ fn abnf_keeps_an_old_shape_plus_production() {
     );
     assert_rfc5234_shape(&out);
 }
+
+/// A user rule with a non-consuming self-replace open alternative that is
+/// NOT a loop entry: a guarded or counted state transition, such as
+/// `{ c: [n.mode == 0], n: {mode: 1}, r: st }`. Its `s`, `b`, `p` and
+/// `r` are the entry's, and it is no repetition: the entry's own guard
+/// `n.rep == 0` and its counter set to 1 are part of the shape, and each
+/// is tried without the other here too. Read as a loop, the whole rule
+/// was rewritten as `st = *( A / B )`, accepting the empty input and any
+/// number of items where the original takes one. It renders as the
+/// emitter always rendered it, a reference to the rule among its
+/// alternatives (`st = st / A / B` is what origin/main emits), and never
+/// as `*…`.
+#[test]
+fn abnf_does_not_read_an_unguarded_self_replace_as_a_loop() {
+    let guard = |name: &str, value: f64| Condition {
+        path: vec!["n".into(), name.into()],
+        op: CompareOp::Eq,
+        value: Value::Number(value),
+    };
+    let transitions = [
+        // Another counter's transition.
+        AltSpec {
+            c: vec![guard("mode", 0.0)],
+            n: HashMap::from([("mode".to_string(), 1)]),
+            r: Some("st".into()),
+            ..Default::default()
+        },
+        // The bare self-replace.
+        AltSpec {
+            r: Some("st".into()),
+            ..Default::default()
+        },
+        // The guard without the counter.
+        AltSpec {
+            c: vec![guard("rep", 0.0)],
+            r: Some("st".into()),
+            ..Default::default()
+        },
+        // The counter without the guard.
+        counted(
+            AltSpec {
+                r: Some("st".into()),
+                ..Default::default()
+            },
+            1,
+        ),
+    ];
+    for transition in transitions {
+        let mut parser = Tabnas::new();
+        parser.options.rule.start = "st".into();
+        let a = parser.token_with_source("#A", "a");
+        let b = parser.token_with_source("#B", "b");
+        parser.define_rule("st", move |spec| {
+            spec.clear();
+            spec.add_open(transition);
+            spec.add_open(AltSpec {
+                s: vec![vec![a]],
+                ..Default::default()
+            });
+            spec.add_open(AltSpec {
+                s: vec![vec![b]],
+                ..Default::default()
+            });
+            spec.add_close(AltSpec::new());
+        });
+
+        let out = abnf(&parser);
+        assert_eq!(
+            out, "st = st / A / B\n\nA = %s\"a\"\nB = %s\"b\"",
+            "a self-replace that is not the loop entry:\n{out}"
+        );
+        assert!(!out.contains('*'), "read as a repetition:\n{out}");
+        assert_rfc5234_shape(&out);
+    }
+}
+
+/// `one = A [ one ]`, hand-built as a guarded close continuation: the
+/// open consumes `A`, and the closes are `{ s: A, b: 1, r: one }`, which
+/// peeks the next `A` and re-enters the rule, and `{ }`. The continuation
+/// replaces with the rule being rendered and is not its loop entry (a
+/// close, and unguarded), so it keeps its content. Calling it empty for
+/// the self-replace alone skipped it and emitted `one = A`: exactly one
+/// where the rule takes one or more. origin/main emits the pinned text.
+#[test]
+fn abnf_keeps_a_guarded_self_replacing_close_continuation() {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "one".into();
+    let a = parser.token_with_source("#A", "a");
+    parser.define_rule("one", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            ..Default::default()
+        });
+        spec.add_close(AltSpec {
+            s: vec![vec![a]],
+            b: 1,
+            r: Some("one".into()),
+            ..Default::default()
+        });
+        spec.add_close(AltSpec::new());
+    });
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out, "one = A [ one ]\n\nA = %s\"a\"",
+        "one-or-more continuation mismatch:\n{out}"
+    );
+    assert_rfc5234_shape(&out);
+}
+
+/// `top = *( "b" *"a" "c" )` with the outer star in the loop shape and
+/// the inner star in the OLD push-chain shape, a mix a hand-built grammar
+/// can carry. A loop's helpers are the rules named after it, `H$alt0` and
+/// `H$alt0$step1`, and nothing else it reaches: the foldable group is
+/// inlined on its own account, and the old star, a kept production, stays
+/// a bareword reference inside the repetition, with its production and
+/// its epsilon branch. Finding the helpers by reachability added the old
+/// star to them, suppressed its production and inlined it without its
+/// epsilon branch and back edge: `*( B A C )`, exactly one `A` where the
+/// original takes any number.
+#[test]
+fn abnf_keeps_an_old_shape_star_inside_a_loop_group() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let c = parser.token_with_source("#C", "c");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star__gen2_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        // The push chain: each item pushes the rule again.
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec::new());
+    });
+    simple_rule(
+        &mut parser,
+        "_gen2_group",
+        AltSpec {
+            s: vec![vec![b]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("_gen2_group$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        &mut parser,
+        "_gen2_group$step1",
+        AltSpec {
+            s: vec![vec![c]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_group",
+        &[b],
+        "_gen2_group",
+        end,
+    );
+    wrap_start(&mut parser, "top");
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out,
+        "top = *( B r-gen1-star-A C )\nr-gen1-star-A = [ A r-gen1-star-A ]\n\nB = %s\"b\"\nC = %s\"c\"\nA = %s\"a\"",
+        "old-shape star inside a loop mismatch:\n{out}"
+    );
+    for leak in ["_gen", "$", "-alt", "step1"] {
+        assert!(!out.contains(leak), "a synthetic {leak:?} leaked:\n{out}");
+    }
+    assert_rfc5234_shape(&out);
+}
