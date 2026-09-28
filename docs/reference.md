@@ -395,10 +395,10 @@ All three runtimes emit the `collide` fixture byte-for-byte identically.
 
 ## The repeat loop: the Rust port leads
 
-tabnas/bnf#80 changed how the BNF compiler (which abnf, ebnf and gbnf
-compile through) emits every repetition. Before it, `*A` desugared to a
-right-recursive helper `H = A H / ε`, each item pushing a new `H`: a
-push chain, one frame per item. Since it, `*A` is a same-depth replace
+tabnas/bnf#80 changed how the BNF compiler (which the `abnf`, `ebnf` and
+`gbnf` grammars compile through) emits every repetition. Before it, `*A`
+compiled to a right-recursive helper `H = A H / ε`, each item pushing a
+new `H`: a push chain, one frame per item. Since it, `*A` is a same-depth replace
 loop. For `*A` with helper `H` (named as before, `_gen1_star_A`; `1*A`
 is `A` followed by the star of `A`; a repetition inside a group nests as
 `_gen2_star__gen1_group`):
@@ -456,7 +456,7 @@ The shapes are pinned by `rs/tests/abnf_test.rs` (`rep = *"a"`,
 `s = *( "a" / "b" ) ";"`, `outer = *( "<" *"i" ">" )`, hand-built from
 the compiler's output because the emitter must never gain an ABNF
 dependency, even in a test), which check the emitted text is RFC 5234
-(no dangling `/`, legal rulenames). No shared `test/spec` fixture pins
+(no dangling `/`, legal rule names). No shared `test/spec` fixture pins
 them yet: all three runtimes run those, and two do not render the loop
 yet. When TypeScript and Go follow, the shapes move to `test/spec` and
 this section becomes history like the one above it.
