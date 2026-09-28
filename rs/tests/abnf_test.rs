@@ -572,6 +572,78 @@ fn simple_rule(parser: &mut Tabnas, name: &str, open: AltSpec, close: Option<Alt
     });
 }
 
+/// The compiler's `[ X ]` over a rule: take it when its FIRST token is
+/// next (peek, then the pushed rule consumes it), skip it on a FOLLOW
+/// token or on anything else.
+fn optional_of(parser: &mut Tabnas, name: &str, first: Tin, item: &str, follows: &[Tin]) {
+    let item = item.to_string();
+    let follows = follows.to_vec();
+    parser.define_rule(name, move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![first]],
+            b: 1,
+            p: Some(item),
+            ..Default::default()
+        });
+        for follow in follows {
+            spec.add_open(AltSpec {
+                s: vec![vec![follow]],
+                b: 1,
+                ..Default::default()
+            });
+        }
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec::new());
+    });
+}
+
+/// `[ "x" ]` as the compiler builds it: a group holding the token, and
+/// the optional over the group, named after it. Returns the optional's
+/// name, `_gen<index+1>_opt__gen<index>_group`.
+fn optional_group(parser: &mut Tabnas, index: u32, item: Tin, follows: &[Tin]) -> String {
+    let group = format!("_gen{index}_group");
+    let opt = format!("_gen{}_opt_{group}", index + 1);
+    simple_rule(
+        parser,
+        &group,
+        AltSpec {
+            s: vec![vec![item]],
+            ..Default::default()
+        },
+        None,
+    );
+    optional_of(parser, &opt, item, &group, follows);
+    opt
+}
+
+/// The compiler's `1*X` over a rule item: the helper pushes the item
+/// and, on close, replaces with a step that pushes the star of the item.
+fn plus_chain(parser: &mut Tabnas, name: &str, item: &str, star: &str) {
+    let step = format!("{name}$step1");
+    simple_rule(
+        parser,
+        name,
+        AltSpec {
+            p: Some(item.into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some(step.clone()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        parser,
+        &step,
+        AltSpec {
+            p: Some(star.into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+}
+
 /// The text a loop test pins, plus the two RFC 5234 shapes and the
 /// absence of any leaked synthetic: neither `_gen` / `r-gen` nor the
 /// `$alt` / `-alt` of an iteration helper may reach the output.
@@ -611,12 +683,18 @@ fn abnf_renders_a_terminal_loop_as_a_star() {
 }
 
 /// `rep = 1*"a"`: the `_plus` helper is `A` followed by the star of `A`.
-/// With the star a loop the helper folds, and `1*A` comes out as `A *A`,
-/// which recognises the same language. (With an old-shape star the helper
-/// stays a production, as it always did: see
+/// With the star a loop the helper folds, and is written back as the
+/// `1*A` it was compiled from — not the `A *A` it is element by element.
+/// The two recognise the same language, but the abnf crate does not
+/// compile them to the same recogniser: where the item is nullable
+/// (`1*( [ "+" "e" ] )`) or its FIRST meets its FOLLOW (`1*item` with
+/// `item = "]" "e" / [ "d" ]`), the recompiled `A *A` rejected `+e` and
+/// `]e`, which the original accepts. This pinned `rep = A *A` until that
+/// round trip failed. (With an old-shape star the helper stays a
+/// production, as it always did: see
 /// `abnf_keeps_an_old_shape_plus_production`.)
 #[test]
-fn abnf_renders_a_plus_over_a_loop_as_item_then_star() {
+fn abnf_renders_a_plus_over_a_loop_as_one_or_more() {
     let mut parser = Tabnas::new();
     let a = parser.token_with_source("#A", "a");
     let end = token(&parser, "#ZZ");
@@ -642,7 +720,7 @@ fn abnf_renders_a_plus_over_a_loop_as_item_then_star() {
     );
     wrap_start(&mut parser, "rep");
 
-    assert_loop_abnf(&abnf(&parser), "rep = A *A\n\nA = %s\"a\"");
+    assert_loop_abnf(&abnf(&parser), "rep = 1*A\n\nA = %s\"a\"");
 }
 
 /// `doc = *item` with `item = "x" "y"`: a rule item, so the loop goes
@@ -863,6 +941,231 @@ fn abnf_renders_a_loop_nested_in_a_loop() {
         &abnf(&parser),
         "outer = *( T *I T1 )\n\nT  = \"<\"\nI  = %s\"i\"\nT1 = \">\"",
     );
+}
+
+/// `rep = 2*"a"`: a counted repetition compiles to a `_rep` helper, the
+/// item `n` times then the star of the item, in one alternative for a
+/// terminal item. It is written back as `2*A` for the reason `1*A` is.
+#[test]
+fn abnf_renders_a_counted_repetition_over_a_loop_with_its_count() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "rep",
+        AltSpec {
+            p: Some("_gen1_rep_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    terminal_loop(&mut parser, "_gen1_star_term", a, end);
+    simple_rule(
+        &mut parser,
+        "_gen1_rep_term",
+        AltSpec {
+            s: vec![vec![a], vec![a]],
+            p: Some("_gen1_star_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    wrap_start(&mut parser, "rep");
+
+    assert_loop_abnf(&abnf(&parser), "rep = 2*A\n\nA = %s\"a\"");
+}
+
+/// `n = 2*4"z"`: a bounded repetition compiles to a `_rep` helper too,
+/// but one that ends in nested optionals rather than a loop. Its body is
+/// not an item then a repetition, so it renders as it is; the count
+/// rewrite must not reach for a `_rep` name alone.
+#[test]
+fn abnf_leaves_a_bounded_repetition_as_its_optionals() {
+    let mut parser = Tabnas::new();
+    let z = parser.token_with_source("#Z", "z");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "n",
+        AltSpec {
+            p: Some("_gen1_rep_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    let inner = optional_group(&mut parser, 1, z, &[end]);
+    simple_rule(
+        &mut parser,
+        "_gen3_group",
+        AltSpec {
+            s: vec![vec![z]],
+            p: Some(inner),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    optional_of(
+        &mut parser,
+        "_gen4_opt__gen3_group",
+        z,
+        "_gen3_group",
+        &[end],
+    );
+    simple_rule(
+        &mut parser,
+        "_gen1_rep_term",
+        AltSpec {
+            s: vec![vec![z], vec![z]],
+            p: Some("_gen4_opt__gen3_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    wrap_start(&mut parser, "n");
+
+    assert_loop_abnf(&abnf(&parser), "n = Z Z [ Z [ Z ] ]\n\nZ = %s\"z\"");
+}
+
+/// `top = *[ "," ]`: a loop over an optional. The star's helper is named
+/// after its item, `_gen3_star__gen2_opt__gen1_group`, and so are its
+/// iteration helpers, and deciding the `[ … ]` wrap by a substring test
+/// for `_opt` reached all three: the option was wrapped again, and the
+/// step, whose only content is the back edge, became the empty option in
+/// `*[ [ T ] [  ] ]`. RFC 5234 has no room for it: an option holds an
+/// alternation, and an alternation at least one concatenation. Read from
+/// the rule's own segment, only the optional's helper is an optional.
+/// (The optional's exits peek the item's own token as well as the end:
+/// inside a loop, the item is its own FOLLOW.)
+#[test]
+fn abnf_renders_a_loop_over_an_optional_without_an_empty_option() {
+    let mut parser = Tabnas::new();
+    let comma = parser.token_with_source("#T", ",");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star__gen2_opt__gen1_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    let opt = optional_group(&mut parser, 1, comma, &[comma, end]);
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_opt__gen1_group",
+        &[comma],
+        &opt,
+        end,
+    );
+    wrap_start(&mut parser, "top");
+
+    let out = abnf(&parser);
+    assert!(!has_empty_option(&out), "an empty `[ ]` option in:\n{out}");
+    assert_loop_abnf(&out, "top = *[ T ]\n\nT = \",\"");
+}
+
+/// `top = 1*[ "a" ]`: the `_plus` helper over an optional is named after
+/// it too (`_gen3_plus__gen2_opt__gen1_group`), as is its chain step. The
+/// same substring test rendered `[ [ A ] [ *[ [ A ] [  ] ] ] ]`; the
+/// helper is a plus, its step a step, and the whole is the `1*[ A ]` it
+/// came from.
+#[test]
+fn abnf_renders_a_plus_over_an_optional_loop_as_one_or_more() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_plus__gen2_opt__gen1_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    let opt = optional_group(&mut parser, 1, a, &[a, end]);
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_opt__gen1_group",
+        &[a],
+        &opt,
+        end,
+    );
+    plus_chain(
+        &mut parser,
+        "_gen3_plus__gen2_opt__gen1_group",
+        &opt,
+        "_gen3_star__gen2_opt__gen1_group",
+    );
+    wrap_start(&mut parser, "top");
+
+    let out = abnf(&parser);
+    assert!(!has_empty_option(&out), "an empty `[ ]` option in:\n{out}");
+    assert_loop_abnf(&out, "top = 1*[ A ]\n\nA = %s\"a\"");
+}
+
+/// `top = 1*( "a" "b" )` and `top = 1*( "a" / "b" )`: a plus over a
+/// group. The loop writes the sequence as `*( A B )` and the alternation,
+/// already one parenthesised element, as `*( A / B )`; the plus is the
+/// item as the loop wrote it, once, then the loop, in either spelling,
+/// and comes back as `1*( A B )` and `1*( A / B )`.
+#[test]
+fn abnf_renders_a_plus_over_a_group_loop_as_one_or_more() {
+    for (alternation, want) in [
+        (false, "top = 1*( A B )\n\nA = %s\"a\"\nB = %s\"b\""),
+        (true, "top = 1*( A / B )\n\nA = %s\"a\"\nB = %s\"b\""),
+    ] {
+        let mut parser = Tabnas::new();
+        let a = parser.token_with_source("#A", "a");
+        let b = parser.token_with_source("#B", "b");
+        let end = token(&parser, "#ZZ");
+        simple_rule(
+            &mut parser,
+            "top",
+            AltSpec {
+                p: Some("_gen2_plus__gen1_group".into()),
+                ..Default::default()
+            },
+            Some(AltSpec::new()),
+        );
+        parser.define_rule("_gen1_group", move |spec| {
+            spec.clear();
+            if alternation {
+                spec.add_open(AltSpec {
+                    s: vec![vec![a]],
+                    ..Default::default()
+                });
+                spec.add_open(AltSpec {
+                    s: vec![vec![b]],
+                    ..Default::default()
+                });
+            } else {
+                spec.add_open(AltSpec {
+                    s: vec![vec![a], vec![b]],
+                    ..Default::default()
+                });
+            }
+        });
+        let firsts: &[Tin] = if alternation { &[a, b] } else { &[a] };
+        ref_loop(
+            &mut parser,
+            "_gen2_star__gen1_group",
+            firsts,
+            "_gen1_group",
+            end,
+        );
+        plus_chain(
+            &mut parser,
+            "_gen2_plus__gen1_group",
+            "_gen1_group",
+            "_gen2_star__gen1_group",
+        );
+        wrap_start(&mut parser, "top");
+
+        assert_loop_abnf(&abnf(&parser), want);
+    }
 }
 
 /// Design point 4: a grammar in the OLD shape renders exactly as before.

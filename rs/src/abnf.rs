@@ -283,12 +283,14 @@ impl<'a> Emitter<'a> {
     /// reconstruct reliably, so those rules are emitted as productions
     /// unchanged — still a valid, recognition-equivalent grammar. A
     /// repetition in the loop shape is not decided here: see
-    /// [`Emitter::is_folded`].
+    /// [`Emitter::is_folded`]. The kind is read from the rule's own
+    /// segment ([`gen_kind`]), so a helper named after a repetition it
+    /// merely contains is judged by what it is.
     fn is_foldable(&self, name: &str) -> bool {
-        if !self.is_synthetic(name) || name.contains("_star") || name.contains("$alt") {
+        if !self.is_synthetic(name) || gen_kind(name) == Some("star") || name.contains("$alt") {
             return false;
         }
-        !name.contains("_plus") || self.plus_folds(name)
+        gen_kind(name) != Some("plus") || self.plus_folds(name)
     }
 
     /// `1*A` compiles to a `_plus` helper: `A` followed by the star of `A`.
@@ -317,7 +319,7 @@ impl<'a> Emitter<'a> {
                 if self.loops.contains(target) || self.loop_helpers.contains(target) {
                     continue;
                 }
-                if target.contains("_star") || target.contains("$alt") {
+                if gen_kind(target) == Some("star") || target.contains("$alt") {
                     return false;
                 }
                 pending.push(target.to_owned());
@@ -624,19 +626,103 @@ impl<'a> Emitter<'a> {
         }
         let mut inner = seen.clone();
         inner.insert(name.to_string());
-        if name.contains("_opt") {
+        // The optional's own helper, and only that: a star over an
+        // optional is named after it (`_gen3_star__gen2_opt__gen1_group`),
+        // and so are its iteration helpers, and a substring test for
+        // `_opt` wrapped each of those in `[ … ]` too — `*[ [ T ] [  ] ]`,
+        // with the step, whose only content is the back edge, as an empty
+        // option, which RFC 5234 has no room for. (The canonical
+        // TypeScript still tests the substring; it never inlined those
+        // names, so it never met them. It follows with the loop.)
+        if is_helper(name, "opt") {
             let body = self.rule_seq(name, &inner);
             return format!("[ {body} ]");
         }
+        let body = self.rule_seq(name, &inner);
+        if is_helper(name, "plus") || is_helper(name, "rep") {
+            if let Some(counted) = self.counted_repetition(name, &body, &inner) {
+                return counted;
+            }
+        }
         // group / chain-step: inline the body, parenthesising a bare
         // multi-way alternation that will sit inside a larger sequence.
-        let body = self.rule_seq(name, &inner);
         let multi = 1 < self.content_opens(name).len();
         if multi && self.close_cont(name, &inner).is_empty() {
             format!("( {body} )")
         } else {
             body
         }
+    }
+
+    /// `1*A` compiles to a `_plus` helper that is `A` followed by the star
+    /// of `A`, and `n*A` to a `_rep` helper that is `A` `n` times followed
+    /// by it. Rendered element by element those read `A *A` and `A A *A`:
+    /// the same language as `1*A` and `2*A`, but not the same recogniser
+    /// once recompiled. The abnf crate compiles `A *A` and `1*A`
+    /// differently, and where `A` is nullable, or its FIRST meets its
+    /// FOLLOW, the recompiled `A *A` rejects inputs the original accepts:
+    /// `1*( [ "+" "e" ] )` on `+e`, `1*item` with `item = "]" "e" / [ "d" ]`
+    /// on `]e`. So a helper whose body is the item of the loop it ends in,
+    /// `n` times, then that loop's repetition is written back as the
+    /// repetition it was compiled from: `1*A`, `1*[ A ]`, `2*( a b )`. Any
+    /// other body renders as it is: a bounded `2*4A` compiles to nested
+    /// optionals and ends in no loop, and a hand-built rule that merely
+    /// carries the name is whatever it says.
+    fn counted_repetition(
+        &mut self,
+        name: &str,
+        body: &str,
+        seen: &BTreeSet<String>,
+    ) -> Option<String> {
+        let loop_name = self.loop_after(name)?;
+        let mut inner = seen.clone();
+        inner.insert(loop_name.clone());
+        let repetition = self.repetition(&loop_name, &inner);
+        // The item as the repetition wrote it: `A`, `[ A ]`, `( A / B )`,
+        // and for `*( a b )` the bare sequence `a b` the group inlined to.
+        let one = repetition.strip_prefix('*')?;
+        let mut items = vec![one];
+        if let Some(inside) = one.strip_prefix("( ").and_then(|s| s.strip_suffix(" )")) {
+            items.push(inside);
+        }
+        for item in items {
+            let prefix = format!("{item} ");
+            let mut count = 0usize;
+            let mut rest = body;
+            while let Some(next) = rest.strip_prefix(&prefix) {
+                count += 1;
+                rest = next;
+            }
+            if 0 < count && rest == repetition {
+                return Some(format!("{count}{repetition}"));
+            }
+        }
+        None
+    }
+
+    /// The loop a `_plus` / `_rep` helper ends in: the open target of the
+    /// last rule of its chain (`H`, `H$step1`, … linked by their close
+    /// replaces), when that target is a loop. The chain is followed by its
+    /// close edges only, never into the pushed item, which may hold a
+    /// loop of its own.
+    fn loop_after(&self, name: &str) -> Option<String> {
+        let mut visited: BTreeSet<String> = BTreeSet::new();
+        let mut current = name.to_string();
+        loop {
+            if !visited.insert(current.clone()) {
+                return None;
+            }
+            let spec = self.rules.get(&current)?;
+            match spec.close.iter().find_map(|alt| alt.r.clone()) {
+                Some(next) if self.rules.contains_key(&next) => current = next,
+                _ => break,
+            }
+        }
+        let spec = self.rules.get(&current)?;
+        spec.open
+            .iter()
+            .find_map(|alt| alt.p.clone().or_else(|| alt.r.clone()))
+            .filter(|target| self.loops.contains(target))
     }
 
     /// Render a token reference: every token appears by its bare NAME
@@ -674,6 +760,35 @@ fn is_gen_name(name: &str) -> bool {
     name.strip_prefix("_gen")
         .and_then(|rest| rest.chars().next())
         .is_some_and(|ch| ch.is_ascii_digit())
+}
+
+/// The construct a synthesised name encodes — `opt`, `group`, `star`,
+/// `plus`, `rep` — read from the rule's OWN segment: the word after
+/// `_gen<n>_` in the part before any `$`. A repetition's helper is named
+/// after its item, so `_gen3_star__gen2_opt__gen1_group` is the star over
+/// the optional over the group, and its iteration helpers
+/// `…$alt0` / `…$alt0$step1` carry the whole of that name; a substring
+/// test for `_opt` reached all of them. A chain step (`_gen1_group$step1`)
+/// answers with the kind of the rule it continues.
+fn gen_kind(name: &str) -> Option<&str> {
+    let own = name.split('$').next().unwrap_or(name);
+    let rest = own.strip_prefix("_gen")?;
+    let digits = rest.len()
+        - rest
+            .trim_start_matches(|ch: char| ch.is_ascii_digit())
+            .len();
+    if digits == 0 {
+        return None;
+    }
+    let rest = rest[digits..].strip_prefix('_')?;
+    let kind = rest.split('_').next().unwrap_or(rest);
+    (!kind.is_empty()).then_some(kind)
+}
+
+/// `name` is the helper of `kind` itself — not a chain step or an
+/// iteration helper of it, which carry a `$`.
+fn is_helper(name: &str, kind: &str) -> bool {
+    !name.contains('$') && gen_kind(name) == Some(kind)
 }
 
 /// An alt that contributes something to the emitted sequence of `rule`,
@@ -1029,6 +1144,42 @@ mod tests {
         // Replacing with another rule, or pushing, is not the entry.
         assert!(!is_loop_entry(&alt(&[], 0, None, Some("H$alt0")), "H"));
         assert!(!is_loop_entry(&alt(&[], 0, Some("H"), Some("H")), "H"));
+    }
+
+    #[test]
+    fn a_synthetic_kind_is_read_from_its_own_segment() {
+        assert_eq!(gen_kind("_gen1_star_term"), Some("star"));
+        assert_eq!(gen_kind("_gen2_opt__gen1_group"), Some("opt"));
+        assert_eq!(gen_kind("_gen1_group"), Some("group"));
+        // A star over an optional is named after it, and is a star.
+        assert_eq!(gen_kind("_gen3_star__gen2_opt__gen1_group"), Some("star"));
+        assert_eq!(gen_kind("_gen3_plus__gen2_opt__gen1_group"), Some("plus"));
+        // The iteration helpers and chain steps answer for their rule.
+        assert_eq!(
+            gen_kind("_gen3_star__gen2_opt__gen1_group$alt0"),
+            Some("star")
+        );
+        assert_eq!(
+            gen_kind("_gen3_star__gen2_opt__gen1_group$alt0$step1"),
+            Some("star")
+        );
+        assert_eq!(gen_kind("_gen1_group$step1"), Some("group"));
+        // Not synthesised: a user rule, whatever it embeds.
+        assert_eq!(gen_kind("my_opt"), None);
+        assert_eq!(gen_kind("top$step1"), None);
+        assert_eq!(gen_kind("_genx_opt"), None);
+        assert_eq!(gen_kind("_gen1"), None);
+        assert_eq!(gen_kind("_gen1__x"), None);
+        // The helper itself, and only the helper, is wrapped as one.
+        assert!(is_helper("_gen2_opt__gen1_group", "opt"));
+        assert!(!is_helper("_gen3_star__gen2_opt__gen1_group", "opt"));
+        assert!(!is_helper("_gen3_star__gen2_opt__gen1_group$alt0", "opt"));
+        assert!(!is_helper(
+            "_gen3_star__gen2_opt__gen1_group$alt0$step1",
+            "opt"
+        ));
+        assert!(!is_helper("_gen3_plus__gen2_opt__gen1_group$step1", "plus"));
+        assert!(is_helper("_gen3_plus__gen2_opt__gen1_group", "plus"));
     }
 
     #[test]

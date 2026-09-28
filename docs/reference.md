@@ -442,18 +442,34 @@ only until the other two catch up. What the Rust emitter does:
    (inlined when foldable) followed by its close continuation, and the
    back edges (`r: H$alt0$step1`, then `r: H`) render nothing. `H`,
    `H$alt0` and `H$alt0$step1` are never productions of their own. A
-   `_plus` helper over a loop folds too, so `1*A` comes out as `A *A`,
-   which recognises the same language. A loop that is a USER rule keeps
-   its production, whose body is the repetition.
-4. **The old shape renders exactly as before.** A push-chain `_star`,
+   `_plus` helper over a loop folds too, and is written back as the
+   `1*A` it was compiled from (a `_rep` helper as `2*A`): element by
+   element it is `A *A`, the same language, but the abnf crate compiles
+   `A *A` and `1*A` to different recognisers, and where `A` is nullable
+   the recompiled `A *A` rejects inputs the original accepts. A loop
+   that is a USER rule keeps its production, whose body is the
+   repetition.
+4. **A synthesised helper's kind is read from its own name segment**,
+   the word after `_gen<n>_` in the part before any `$`, never from a
+   name it embeds. A repetition's helper is named after its item: a star
+   over an optional is `_gen3_star__gen2_opt__gen1_group`, and its
+   iteration helpers carry the whole of that name. The canonical decides
+   the `[ … ]` wrap by a substring test for `_opt`, which is harmless
+   there (those names are never inlined) and, once the loop inlines
+   them, wrapped the loop and its step as options too: `*[ [ T ] [  ] ]`,
+   with an empty option RFC 5234 does not allow, where `*[ T ]` was
+   meant.
+5. **The old shape renders exactly as before.** A push-chain `_star`,
    its `_plus` and their `$alt` helpers carry no self-replace entry and
    stay kept productions (`r-gen1-star-A = [ A r-gen1-star-A ]`), as
    `TestAbnfKeepsRepetitionProduction`, the TypeScript "keeps repetition
    as a production" case and `abnf_keeps_a_repetition_production` pin.
 
 The shapes are pinned by `rs/tests/abnf_test.rs` (`rep = *"a"`,
-`rep = 1*"a"`, `doc = *item`, `list = "[" *( "," item ) "]"`,
-`s = *( "a" / "b" ) ";"`, `outer = *( "<" *"i" ">" )`, hand-built from
+`rep = 1*"a"`, `rep = 2*"a"`, `n = 2*4"z"`, `doc = *item`,
+`list = "[" *( "," item ) "]"`, `s = *( "a" / "b" ) ";"`,
+`outer = *( "<" *"i" ">" )`, `top = *[ "," ]`, `top = 1*[ "a" ]`,
+`top = 1*( "a" "b" )`, `top = 1*( "a" / "b" )`, hand-built from
 the compiler's output because the emitter must never gain an ABNF
 dependency, even in a test), which check the emitted text is RFC 5234
 (no dangling `/`, legal rule names). No shared `test/spec` fixture pins
