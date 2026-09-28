@@ -434,17 +434,25 @@ only until the other two catch up. What the Rust emitter does:
 2. **The self-replace entry is skipped** when rendering its own rule: it
    is bookkeeping, not syntax. Every other replace with the rule itself
    is content, as before: the close `{ s: A, b: 1, r: rule }` after an
-   open that consumed `A` is the `[ rule ]` of `rule = A [ rule ]`.
+   open that consumed `A` is the `[ rule ]` of `rule = A [ rule ]`. Only
+   a loop has an entry to skip: a rule that is not one (its open
+   alternatives hold no entry) keeps every alternative, a close in the
+   entry's shape included, so `odd = A [ odd ]` renders as it always did.
 3. **A rule with such an entry is a loop**, decided by shape rather than
    by name, and the guard is part of the shape: the entry consumes
    nothing, pushes nothing, replaces the rule with itself, carries the
    guard `n.rep == 0`, and sets that counter to 1. A user rule's own
    non-consuming self-replace, a guarded or counted state transition
    without that guard, is not a loop and renders as a reference to the
-   rule, as it always did. The helpers of a loop `H` are the rules named
-   `H$…` and nothing else it reaches: a kept production inside the
-   iteration, such as an old push-chain star, stays a reference by name
-   with its own production. The loop is rendered wherever it is
+   rule, as it always did. The helpers of a loop `H` are the synthetic
+   rules its iteration reaches short of a kept production, bounded by
+   those productions and not by name: `H$alt0` and `H$alt0$step1`, the
+   foldable group the iteration pushes, and the `$alt` / `$step` chain
+   the compiler gives a group whose alternative starts with a rule
+   (`( *A B / C )` has one). A kept production inside the iteration, a
+   user rule, a nested loop or an old push-chain star, stays a reference
+   by name with its own production, and nothing beyond it is reached; a
+   `_plus` is judged for itself. The loop is rendered wherever it is
    referenced as a repetition of its iteration: `*A` and `*"a"` when the
    iteration is one element, `*( a b )` otherwise, where the iteration
    is the ` / `-joined rendering of the continue alternatives. A
@@ -486,9 +494,13 @@ the compiler's output because the emitter must never gain an ABNF
 dependency, even in a test), which check the emitted text is RFC 5234
 (no dangling `/`, legal rule names). Three more pin what the shape
 excludes: a user rule's unguarded self-replace stays `st = st / A / B`,
-a guarded close continuation stays `one = A [ one ]`, and an old
-push-chain star inside a loop's group stays a kept production,
-`top = *( B r-gen1-star-A C )`. No shared `test/spec` fixture pins
+a guarded close continuation stays `one = A [ one ]`, a close in the
+entry's whole shape on a rule that is no loop stays `odd = A [ odd ]`,
+and an old push-chain star inside a loop's group stays a kept
+production, `top = *( B r-gen1-star-A C )`. Two more pin the bound: a
+group with a `$alt` chain of its own inside a loop renders as
+`top = *( *A B / C ) D`, and the plus over it as
+`top = 1*( *A B / C ) D`. No shared `test/spec` fixture pins
 them yet: all three runtimes run those, and two do not render the loop
 yet. When TypeScript and Go follow, the shapes move to `test/spec` and
 this section becomes history like the one above it.

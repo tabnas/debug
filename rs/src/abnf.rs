@@ -30,11 +30,12 @@
 //! describe a user rule's own non-consuming self-replace, a guarded or
 //! counted state transition, which is no repetition. Such a rule is
 //! rendered wherever it is referenced as `*A` / `*( a b )`, and neither
-//! it nor its `H$alt0` / `H$alt0$step1` iteration helpers — the rules
-//! named `H$…`, and only those — is emitted as a production. The older
-//! push chain (`H = A H / ε`, one frame per item) carries no such entry
-//! and renders as before, as a kept production, wherever it sits, inside
-//! a loop's iteration included.
+//! it nor its iteration helpers — `H$alt0` and `H$alt0$step1`, and the
+//! `$alt` / `$step` chains of the foldable groups the iteration pushes,
+//! everything the iteration reaches short of a kept production — is
+//! emitted as a production. The older push chain (`H = A H / ε`, one
+//! frame per item) carries no such entry and renders as before, as a
+//! kept production, wherever it sits, inside a loop's iteration included.
 //!
 //! Ported from `ts/src/debug.ts` (`emitAbnf` and friends), which is
 //! canonical — except for the repeat loop above, where THIS PORT LEADS:
@@ -200,9 +201,10 @@ struct Emitter<'a> {
     /// and a user rule's own self-replace does not.
     loops: BTreeSet<String>,
     /// The synthetic rules a loop's iteration runs through (`H$alt0`,
-    /// `H$alt0$step1`): the rules named `H$…`, and only those. Inlined
-    /// into the repetition wherever the loop is referenced, never
-    /// productions.
+    /// `H$alt0$step1`, and the `$alt` / `$step` chains of the groups it
+    /// pushes), bounded by the kept productions (see
+    /// [`Emitter::find_loop_helpers`]). Inlined into the repetition
+    /// wherever the loop is referenced, never productions.
     loop_helpers: BTreeSet<String>,
 }
 
@@ -234,28 +236,84 @@ impl<'a> Emitter<'a> {
         emitter
     }
 
-    /// The iteration helpers of every loop `H`: the rules named `H$…`
-    /// (`H$alt0`, pushing the item, and `H$alt0$step1`, replacing with
-    /// `H`), and nothing else. They were once found by reachability from
-    /// the continue alternatives, stopping at user rules and other loops,
-    /// which reached through a foldable group the loop repeats to any
-    /// synthetic production it references: the old push-chain star of
-    /// `*( B *A C )` was folded away with its epsilon branch and its back
-    /// edge, and `*( B A C )` came out. A group inside the iteration is
-    /// inlined by [`Emitter::is_foldable`] on its own account; a kept
-    /// production stays a bareword reference.
+    /// The iteration helpers of every loop `H`: the synthetic rules
+    /// reachable from its continue alternatives without passing through
+    /// a KEPT PRODUCTION, which the walk neither enters nor adds
+    /// ([`Emitter::bounds_loop_helpers`]): `H$alt0`, pushing the item,
+    /// `H$alt0$step1`, replacing with `H`, and the `$alt` / `$step` chain
+    /// the compiler gives a group whose alternative starts with a rule
+    /// (`_gen2_group$alt0`, `_gen2_group$alt0$step1`, `_gen2_group$alt1`
+    /// for `( *A B / C )`). A user rule the iteration pushes keeps its
+    /// production; a nested loop is a loop of its own; an old push-chain
+    /// star stays a kept production, as does a `_plus`, which
+    /// [`Emitter::is_foldable`] judges for itself.
+    ///
+    /// The bound is by kept productions, not by name. A walk that
+    /// stopped only at user rules and other loops reached through a
+    /// foldable group to the old star inside `*( B *A C )` and folded it
+    /// away with its epsilon branch and its back edge: `*( B A C )`. A
+    /// scan for the rules named `H$…` never reached the group's own
+    /// chain, whose `$alt` names [`Emitter::is_foldable`] refuses, so
+    /// `*( *A B / C )` came out as `*( r-gen2-group-alt0 /
+    /// r-gen2-group-alt1 )` over three kept productions, and the `_plus`
+    /// over the same group, refused by [`Emitter::plus_folds`] for the
+    /// same names, as `X *X` in place of `1*X`.
     fn find_loop_helpers(&self) -> BTreeSet<String> {
         let mut helpers = BTreeSet::new();
-        for name in &self.loops {
-            let prefix = format!("{name}$");
-            helpers.extend(
-                self.rules
-                    .keys()
-                    .filter(|rule| rule.starts_with(&prefix) && !self.loops.contains(*rule))
-                    .cloned(),
-            );
+        let mut pending: Vec<String> = self
+            .loops
+            .iter()
+            .filter_map(|name| self.rules.get(name).map(|spec| (name, spec)))
+            .flat_map(|(name, spec)| {
+                spec.open
+                    .iter()
+                    .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref()))
+                    .filter(|target| *target != name.as_str())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        while let Some(name) = pending.pop() {
+            if self.bounds_loop_helpers(&name) || helpers.contains(&name) {
+                continue;
+            }
+            let Some(spec) = self.rules.get(&name) else {
+                continue;
+            };
+            helpers.insert(name.clone());
+            for alt in spec.open.iter().chain(spec.close.iter()) {
+                if let Some(target) = alt.p.as_deref().or(alt.r.as_deref()) {
+                    pending.push(target.to_owned());
+                }
+            }
         }
         helpers
+    }
+
+    /// A rule that is a production of its own, or decides that for
+    /// itself, and so bounds the iteration helpers of every loop: a user
+    /// rule, a loop, or a repetition helper that is no loop's own — an old
+    /// push-chain `_star` with its `$alt` helpers
+    /// ([`Emitter::is_kept_repetition`]), and a `_plus` in either shape,
+    /// which [`Emitter::is_foldable`] judges through
+    /// [`Emitter::plus_folds`]. A loop's own `H$alt0` and `H$alt0$step1`
+    /// carry the loop's whole name, star and all, and are read by their
+    /// own segment: the loop.
+    fn bounds_loop_helpers(&self, name: &str) -> bool {
+        if !self.is_synthetic(name) || self.loops.contains(name) {
+            return true;
+        }
+        matches!(gen_kind(name), Some("star" | "plus")) && !self.loops.contains(own_segment(name))
+    }
+
+    /// A repetition helper in the old push-chain shape, kept as a
+    /// production as it always was: a `_star` that is not a loop, or one
+    /// of its `$alt0` / `$alt0$step1` iteration helpers, which carry its
+    /// name. A loop's own `H$alt0` is not one (its own segment is the
+    /// loop), nor is the `$alt` chain of a group or the `$step` chain of
+    /// a `_plus`.
+    fn is_kept_repetition(&self, name: &str) -> bool {
+        gen_kind(name) == Some("star") && !self.loops.contains(own_segment(name))
     }
 
     /// A rule the abnf forward-compiler synthesised for a `[...]` /
@@ -289,10 +347,14 @@ impl<'a> Emitter<'a> {
 
     /// `1*A` compiles to a `_plus` helper: `A` followed by the star of `A`.
     /// The helper folds to `A *A` when that star is a loop and nothing
-    /// else it reaches is a kept production; with an old-shape star, a
+    /// else it reaches is a kept repetition; with an old-shape star, a
     /// kept production, the helper stays a production too, as it always
     /// has. Reaches through the chain steps (`_plus$step1`) a non-terminal
-    /// item puts between the helper and its star.
+    /// item puts between the helper and its star, and through the group
+    /// it pushes and that group's own `$alt` / `$step` chain, which fold:
+    /// the `_plus` over `( *A B / C )` is `1*( *A B / C )`. Refusing
+    /// every `$alt` name here refused that chain, and the helper came out
+    /// as `X *X`, which does not round-trip on a nullable item.
     fn plus_folds(&self, name: &str) -> bool {
         let mut visited: BTreeSet<String> = BTreeSet::new();
         let mut pending: Vec<String> = vec![name.to_owned()];
@@ -313,7 +375,7 @@ impl<'a> Emitter<'a> {
                 if self.loops.contains(target) || self.loop_helpers.contains(target) {
                     continue;
                 }
-                if gen_kind(target) == Some("star") || target.contains("$alt") {
+                if self.is_kept_repetition(target) {
                     return false;
                 }
                 pending.push(target.to_owned());
@@ -474,9 +536,9 @@ impl<'a> Emitter<'a> {
             .unwrap_or_default();
         let has_epsilon = closes
             .iter()
-            .any(|alt| !self.is_end_alt(alt) && !has_content(alt, name));
+            .any(|alt| !self.is_end_alt(alt) && !self.has_content(alt, name));
         for alt in &closes {
-            if self.is_end_alt(alt) || !has_content(alt, name) {
+            if self.is_end_alt(alt) || !self.has_content(alt, name) {
                 continue;
             }
             let cont = self.seq_of_alt(alt, seen);
@@ -506,11 +568,17 @@ impl<'a> Emitter<'a> {
             .map(|spec| {
                 spec.open
                     .iter()
-                    .filter(|alt| has_content(alt, name))
+                    .filter(|alt| self.has_content(alt, name))
                     .cloned()
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// [`has_content`] for an alt of `name`, which is a loop or is not:
+    /// only a loop has an entry to skip.
+    fn has_content(&self, alt: &AltSpec, name: &str) -> bool {
+        has_content(alt, name, self.loops.contains(name))
     }
 
     /// A loop, as a repetition of its iteration: `*A` when the iteration
@@ -765,8 +833,7 @@ fn is_gen_name(name: &str) -> bool {
 /// test for `_opt` reached all of them. A chain step (`_gen1_group$step1`)
 /// answers with the kind of the rule it continues.
 fn gen_kind(name: &str) -> Option<&str> {
-    let own = name.split('$').next().unwrap_or(name);
-    let rest = own.strip_prefix("_gen")?;
+    let rest = own_segment(name).strip_prefix("_gen")?;
     let digits = rest.len()
         - rest
             .trim_start_matches(|ch: char| ch.is_ascii_digit())
@@ -779,6 +846,13 @@ fn gen_kind(name: &str) -> Option<&str> {
     (!kind.is_empty()).then_some(kind)
 }
 
+/// The rule a synthesised name belongs to: the part before any `$`. A
+/// chain step (`_gen1_group$step1`) and an iteration helper (`H$alt0`,
+/// `H$alt0$step1`) answer with the rule they continue.
+fn own_segment(name: &str) -> &str {
+    name.split('$').next().unwrap_or(name)
+}
+
 /// `name` is the helper of `kind` itself — not a chain step or an
 /// iteration helper of it, which carry a `$`.
 fn is_helper(name: &str, kind: &str) -> bool {
@@ -787,8 +861,8 @@ fn is_helper(name: &str, kind: &str) -> bool {
 
 /// An alt that contributes something to the emitted sequence of `rule`,
 /// decided by what it CONSUMES: it eats a token (`len(s) - b > 0`), or
-/// pushes a rule, or replaces with a rule — unless it is `rule`'s own
-/// loop entry ([`is_loop_entry`]). `{ }`, the FOLLOW peek
+/// pushes a rule, or replaces with a rule — unless `rule` is a loop and
+/// this is its entry ([`is_loop_entry`]). `{ }`, the FOLLOW peek
 /// `{ s: FOLLOW, b: 1 }` and the entry `{ c: [n.rep == 0], n: {rep: 1},
 /// r: rule }` are all epsilon: none of them moves the parse past any
 /// input. Counting the peek as content rendered a follow-guarded exit
@@ -797,9 +871,14 @@ fn is_helper(name: &str, kind: &str) -> bool {
 /// itself is content, as it always was: the close `{ s: A, b: 1, r: rule }`
 /// after an open that consumed `A` is the `[ rule ]` of
 /// `rule = A [ rule ]`, and calling it empty for the self-replace alone
-/// emitted `rule = A`, exactly one where the rule takes one or more.
-fn has_content(alt: &AltSpec, rule: &str) -> bool {
-    !is_loop_entry(alt, rule) && (alt.s.len() > alt.b || alt.p.is_some() || alt.r.is_some())
+/// emitted `rule = A`, exactly one where the rule takes one or more. The
+/// same close carrying the entry's guard and counter is content too when
+/// `rule` is no loop (`rule_is_loop`, decided by its OPEN alternatives):
+/// a rule that is not a loop has no entry, only alternatives, and
+/// `odd = A [ odd ]` renders as it always did.
+fn has_content(alt: &AltSpec, rule: &str, rule_is_loop: bool) -> bool {
+    !(rule_is_loop && is_loop_entry(alt, rule))
+        && (alt.s.len() > alt.b || alt.p.is_some() || alt.r.is_some())
 }
 
 /// A repeat loop's entry, the whole of the compiler's shape: the
@@ -1151,26 +1230,50 @@ mod tests {
 
     #[test]
     fn content_is_what_an_alt_consumes() {
+        // `H` is a loop here; the last case renders a rule that is not.
+        let in_loop = |alt: &AltSpec| has_content(alt, "H", true);
         // Eats a token.
-        assert!(has_content(&alt(&[7], 0, None, None), "H"));
+        assert!(in_loop(&alt(&[7], 0, None, None)));
         // Peeks one and gives it back: the follow-guarded exit.
-        assert!(!has_content(&alt(&[7], 1, None, None), "H"));
+        assert!(!in_loop(&alt(&[7], 1, None, None)));
         // Nothing at all.
-        assert!(!has_content(&alt(&[], 0, None, None), "H"));
+        assert!(!in_loop(&alt(&[], 0, None, None)));
         // Pushes a rule.
-        assert!(has_content(&alt(&[], 0, Some("item"), None), "H"));
+        assert!(in_loop(&alt(&[], 0, Some("item"), None)));
         // Replaces with another rule, after a peek.
-        assert!(has_content(&alt(&[7], 1, None, Some("H$alt0")), "H"));
+        assert!(in_loop(&alt(&[7], 1, None, Some("H$alt0"))));
         // The loop entry: replaces with the rule being rendered, guarded.
-        assert!(!has_content(&entry("H"), "H"));
+        assert!(!in_loop(&entry("H")));
         // The same alt is content from any OTHER rule's point of view.
-        assert!(has_content(&entry("H"), "H$alt0$step1"));
+        assert!(has_content(&entry("H"), "H$alt0$step1", false));
         // A self-replace WITHOUT the guard is not the entry and keeps its
         // content: a user rule's own state transition.
-        assert!(has_content(&alt(&[], 0, None, Some("H")), "H"));
+        assert!(in_loop(&alt(&[], 0, None, Some("H"))));
         // So does the guarded one-or-more continuation, a close alt
         // `{ s: A, b: 1, r: H }`: the `[ H ]` of `H = A [ H ]`.
-        assert!(has_content(&alt(&[7], 1, None, Some("H")), "H"));
+        assert!(in_loop(&alt(&[7], 1, None, Some("H"))));
+        // And the entry's own shape, guard and counter included, when the
+        // rule being rendered is NOT a loop: it has no entry to skip, and
+        // the close `{ c: [n.rep == 0], n: {rep: 1}, s: A, b: 1, r: odd }`
+        // is the `[ odd ]` of `odd = A [ odd ]`.
+        let guarded_close = AltSpec {
+            s: vec![vec![7]],
+            b: 1,
+            ..entry("odd")
+        };
+        assert!(has_content(&guarded_close, "odd", false));
+        assert!(!has_content(&guarded_close, "odd", true));
+    }
+
+    #[test]
+    fn a_synthesised_name_belongs_to_its_own_segment() {
+        assert_eq!(own_segment("_gen2_group"), "_gen2_group");
+        assert_eq!(own_segment("_gen2_group$alt0$step1"), "_gen2_group");
+        assert_eq!(
+            own_segment("_gen3_star__gen2_group$alt0"),
+            "_gen3_star__gen2_group"
+        );
+        assert_eq!(own_segment("top"), "top");
     }
 
     #[test]
