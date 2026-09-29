@@ -240,100 +240,160 @@ impl<'a> Emitter<'a> {
     }
 
     /// `rule` is a repeat loop: its open alternatives are the compiler's
-    /// whole scaffold, not its entry alone. There is the entry
-    /// ([`is_loop_entry`]); at least one continue, an alternative that
-    /// consumes, pushes or replaces, and every continue comes back to
-    /// `rule` ([`Emitter::comes_back`]); and at least one exit, an
+    /// whole scaffold, in the compiler's order, not its entry alone. The
+    /// entry comes first ([`is_loop_entry`]); then at least one continue,
+    /// an alternative that consumes, pushes or replaces, and every
+    /// continue comes back to `rule` having made progress
+    /// ([`Emitter::continues_loop`]); and at least one exit, an
     /// alternative that does none of those (the FOLLOW peek
-    /// `{ s: FOLLOW, b: 1 }` or `{ }`), since a repetition can stop. The
+    /// `{ s: FOLLOW, b: 1 }` or `{ }`), since a repetition can stop. No
+    /// continue may follow the empty exit `{ }`, which takes whatever
+    /// comes and so shadows every alternative after it. A FOLLOW peek
+    /// shadows only what it peeks, and the compiler puts one before the
+    /// continues where a keyword must end the loop rather than be taken
+    /// as an item (`*word "end"` with `word = 1*ALPHA`). The
     /// entry alone read a rule as a loop whose continue never came back:
     /// the entry, `{ s: A }` and `{ }` take `A` at most once, and were
     /// emitted as `*A`. A continue that does not come back ends the rule
-    /// after one item, so a rule with one is no repetition of it either.
+    /// after one item, and one that comes back having taken nothing
+    /// repeats nothing, so a rule with either is no repetition. An
+    /// alternative whose route or backtrack a function decides (`p_fn`,
+    /// `r_fn`, `b_fn` and their `_match` forms, a modifier `h`) cannot be
+    /// read, and a rule with one is no loop either.
     fn is_loop(&self, rule: &str, spec: &RuleSpec) -> bool {
-        let (mut entry, mut continues, mut exit) = (false, false, false);
-        for alt in &spec.open {
-            if is_loop_entry(alt, rule) {
-                entry = true;
-            } else if !has_content(alt, rule, true) {
+        let Some((first, rest)) = spec.open.split_first() else {
+            return false;
+        };
+        if !is_loop_entry(first, rule) {
+            return false;
+        }
+        let mut known = BTreeMap::new();
+        let (mut continues, mut exit, mut shadowed) = (false, false, false);
+        for alt in rest {
+            if is_dynamic(alt) {
+                return false;
+            }
+            if !has_content(alt, rule, true) {
                 exit = true;
-            } else if self.comes_back(alt, rule) {
+                shadowed |= alt.s.is_empty() && is_plain_way(alt);
+            } else if !shadowed && self.continues_loop(alt, rule, &mut known) {
                 continues = true;
             } else {
                 return false;
             }
         }
-        entry && continues && exit
+        continues && exit
     }
 
-    /// A continue comes back to its loop `rule`: it replaces with `rule`
-    /// itself (`{ s: A, r: H }`, a terminal item), or with a synthetic
-    /// helper every way through which replaces onward until it reaches
-    /// `rule` ([`Emitter::helper_comes_back`]): `H$alt0`, which pushes
-    /// the item and on close replaces with `H$alt0$step1`, which replaces
-    /// with `H`. A push alone is no back edge: the child returns to the
-    /// continue's own rule, not to the loop.
-    fn comes_back(&self, alt: &AltSpec, rule: &str) -> bool {
-        let mut known = BTreeMap::new();
-        alt.r
-            .as_deref()
-            .is_some_and(|target| self.replaces_back(target, rule, &mut known))
+    /// A continue comes back to its loop `rule` having made progress. It
+    /// replaces with `rule` itself having consumed a token
+    /// (`{ s: A, r: H }`, a terminal item), or with a synthetic helper
+    /// every way through which comes back to `rule` and consumes or
+    /// pushes on the way ([`Emitter::helper_back`]): `H$alt0`, which
+    /// pushes the item and on close replaces with `H$alt0$step1`, which
+    /// replaces with `H`. A push is no back edge, with or without an `r`
+    /// beside it, which the engine does not follow: the child returns to
+    /// the continue's own rule, not to the loop. `known` holds each
+    /// helper's answer for this loop.
+    fn continues_loop(
+        &self,
+        alt: &AltSpec,
+        rule: &str,
+        known: &mut BTreeMap<String, Back>,
+    ) -> bool {
+        if alt.p.is_some() {
+            return false;
+        }
+        let consumed = alt.s.len() > alt.b;
+        match alt.r.as_deref() {
+            Some(target) if target == rule => consumed,
+            Some(target) => match self.back_through(target, rule, known) {
+                Back::Never => false,
+                Back::Bare => consumed,
+                Back::Progress => true,
+            },
+            None => false,
+        }
     }
 
-    /// `name` is `rule`, or a synthetic helper that comes back to it.
-    /// `known` holds each helper's answer, and `false` while it is being
-    /// decided, so a cycle of helpers that never reaches `rule` does not
-    /// come back and each helper is walked once.
-    fn replaces_back(&self, name: &str, rule: &str, known: &mut BTreeMap<String, bool>) -> bool {
+    /// How `name`, a helper on a loop's way back, comes back to `rule`:
+    /// never; always, but on some way without consuming or pushing; or
+    /// always, having consumed or pushed on every way. `rule` itself is
+    /// reached bare. `known` holds each helper's answer, and
+    /// [`Back::Never`] while it is being decided, so a cycle of helpers
+    /// that never reaches `rule` does not come back and each helper is
+    /// walked once per loop.
+    fn back_through(&self, name: &str, rule: &str, known: &mut BTreeMap<String, Back>) -> Back {
         if name == rule {
-            return true;
+            return Back::Bare;
         }
         if let Some(answer) = known.get(name) {
             return *answer;
         }
         if !self.is_synthetic(name) {
-            return false;
+            return Back::Never;
         }
         let Some(spec) = self.rules.get(name) else {
-            return false;
+            return Back::Never;
         };
-        known.insert(name.to_owned(), false);
-        let answer = self.helper_comes_back(spec, rule, known);
+        known.insert(name.to_owned(), Back::Never);
+        let answer = self.helper_back(spec, rule, known);
         known.insert(name.to_owned(), answer);
         answer
     }
 
-    /// Every way through a helper comes back to `rule`. An open
-    /// alternative that replaces hands on to its target, which must come
-    /// back; one that pushes, or does neither, goes on to the helper's
-    /// close, where every alternative must replace with a target that
-    /// comes back. An empty close, or a close alternative that replaces
-    /// with nothing, ends the helper there, short of the loop.
-    fn helper_comes_back(
-        &self,
-        spec: &RuleSpec,
-        rule: &str,
-        known: &mut BTreeMap<String, bool>,
-    ) -> bool {
-        let mut closes = None;
+    /// Every way through a helper, as [`Emitter::back_through`] reads it.
+    /// An open alternative that pushes goes to the helper's close once
+    /// the child is done, having made progress; one that replaces hands
+    /// on to its target; one that does neither goes to the close too, as
+    /// does a helper with no open alternative at all. At the close, every
+    /// alternative must replace with a target that comes back: an empty
+    /// close, one that replaces with nothing, or a push, which re-runs the
+    /// close rather than leaving it, ends the way short of the loop. An
+    /// alternative with a condition or a route a function decides is no
+    /// way back; the compiler puts neither on a loop's helpers.
+    fn helper_back(&self, spec: &RuleSpec, rule: &str, known: &mut BTreeMap<String, Back>) -> Back {
+        let mut close = None;
+        let mut close_back = |known: &mut BTreeMap<String, Back>| -> Back {
+            *close.get_or_insert_with(|| {
+                if spec.close.is_empty() {
+                    return Back::Never;
+                }
+                spec.close.iter().fold(Back::Progress, |acc, alt| {
+                    let back = match alt.r.as_deref() {
+                        Some(target) if alt.p.is_none() && is_plain_way(alt) => self
+                            .back_through(target, rule, known)
+                            .or_progress(alt.s.len() > alt.b),
+                        _ => Back::Never,
+                    };
+                    acc.and(back)
+                })
+            })
+        };
+        if spec.open.is_empty() {
+            return close_back(known);
+        }
+        let mut answer = Back::Progress;
         for alt in &spec.open {
-            let back = match alt.r.as_deref() {
-                Some(target) => self.replaces_back(target, rule, known),
-                None => *closes.get_or_insert_with(|| {
-                    !spec.close.is_empty()
-                        && spec.close.iter().all(|close| {
-                            close
-                                .r
-                                .as_deref()
-                                .is_some_and(|target| self.replaces_back(target, rule, known))
-                        })
-                }),
+            let back = if !is_plain_way(alt) {
+                Back::Never
+            } else if alt.p.is_some() {
+                match close_back(known) {
+                    Back::Never => Back::Never,
+                    _ => Back::Progress,
+                }
+            } else if let Some(target) = alt.r.as_deref() {
+                self.back_through(target, rule, known)
+                    .or_progress(alt.s.len() > alt.b)
+            } else {
+                close_back(known).or_progress(alt.s.len() > alt.b)
             };
-            if !back {
-                return false;
+            answer = answer.and(back);
+            if answer == Back::Never {
+                break;
             }
         }
-        !spec.open.is_empty()
+        answer
     }
 
     /// The iteration helpers of every loop `H`: the synthetic rules
@@ -569,8 +629,15 @@ impl<'a> Emitter<'a> {
     /// says the same thing and is valid.
     fn emit_body(&mut self, name: &str, seen: &BTreeSet<String>) -> String {
         // A user rule that is a loop: its production IS the repetition.
+        // One that repeats nothing matches exactly the empty string, which
+        // `""` says and an empty production cannot (see below).
         if self.loops.contains(name) {
-            return self.repetition(name, seen);
+            let body = self.repetition(name, seen);
+            return if body.is_empty() {
+                "\"\"".to_string()
+            } else {
+                body
+            };
         }
         let opens: Vec<AltSpec> = self
             .rules
@@ -979,6 +1046,64 @@ fn is_helper(name: &str, kind: &str) -> bool {
 fn has_content(alt: &AltSpec, rule: &str, rule_is_loop: bool) -> bool {
     !(rule_is_loop && is_loop_entry(alt, rule))
         && (alt.s.len() > alt.b || alt.p.is_some() || alt.r.is_some())
+}
+
+/// How a helper on a loop's way back reaches the loop (see
+/// [`Emitter::back_through`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Back {
+    /// Some way through ends short of the loop.
+    Never,
+    /// Every way comes back, but some without consuming or pushing.
+    Bare,
+    /// Every way comes back, consuming or pushing on the way.
+    Progress,
+}
+
+impl Back {
+    /// Both ways at once: the weaker of the two.
+    fn and(self, other: Back) -> Back {
+        match (self, other) {
+            (Back::Never, _) | (_, Back::Never) => Back::Never,
+            (Back::Bare, _) | (_, Back::Bare) => Back::Bare,
+            _ => Back::Progress,
+        }
+    }
+
+    /// This way, after a step that consumed a token or not.
+    fn or_progress(self, consumed: bool) -> Back {
+        match self {
+            Back::Bare if consumed => Back::Progress,
+            other => other,
+        }
+    }
+}
+
+/// An alternative whose route, backtrack or whole shape a function
+/// decides when it matches, so what it pushes, replaces or consumes
+/// cannot be read from the spec.
+fn is_dynamic(alt: &AltSpec) -> bool {
+    alt.p_fn.is_some()
+        || alt.p_match.is_some()
+        || alt.r_fn.is_some()
+        || alt.r_match.is_some()
+        || alt.b_fn.is_some()
+        || alt.b_match.is_some()
+        || alt.h.is_some()
+        || alt.h_match.is_some()
+}
+
+/// An alternative a loop's helper can come back through: read from the
+/// spec alone, and taken whatever the rule's state, with no condition of
+/// any kind.
+fn is_plain_way(alt: &AltSpec) -> bool {
+    !is_dynamic(alt)
+        && alt.c.is_empty()
+        && alt.c_ref.is_none()
+        && alt.c_fn.is_none()
+        && alt.c_match.is_none()
+        && alt.c_lex.is_none()
+        && alt.c_lex_match.is_none()
 }
 
 /// A repeat loop's entry, the whole of the compiler's shape: the

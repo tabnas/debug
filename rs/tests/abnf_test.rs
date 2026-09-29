@@ -1349,19 +1349,28 @@ fn rule_of_opens(opens: Opens) -> String {
 }
 
 /// The entry alone does not make a loop: the whole scaffold does, the
-/// entry, continues that each come back to the rule, and an exit. Each
-/// rule here has the entry and lacks one of the others, and none of them
-/// repeats anything:
+/// entry first, continues that each come back to the rule having taken
+/// something, and an exit that shadows none of them. Each rule
+/// here has the entry and not the rest, and none of them repeats
+/// anything:
 ///
 /// - the continue `{ s: A }` never comes back, so with the exit the rule
 ///   takes one `A` or nothing;
 /// - `{ s: A, r: once }` comes back and `{ s: B }` does not, so a `B`
 ///   ends the rule;
 /// - the continue comes back and there is no exit, so the rule never
-///   stops.
+///   stops;
+/// - the continue pushes as well as replacing, and the engine takes the
+///   push and not the replace;
+/// - the continue only peeks and comes back, taking nothing;
+/// - the empty exit `{ }` comes before the continue, which it shadows;
+/// - the entry comes after a continue, not first as the compiler puts
+///   it;
+/// - a function decides the continue's route.
 ///
-/// Read as a loop on its entry alone, the first rendered as `*A`, which
-/// takes any number. Each renders as debug's main emits it, the entry a
+/// Read as a loop on its entry alone, all but one rendered as `*A`, which
+/// takes any number, and the one that takes nothing as `once = `, which
+/// RFC 5234 has no room for. Each renders as debug's main emits it, the entry a
 /// reference to the rule among its alternatives, with no repetition. The
 /// whole scaffold, last, still reads as the loop it is.
 #[test]
@@ -1379,7 +1388,7 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             ..Default::default()
         }
     }
-    let cases: [(&str, Opens, &str); 3] = [
+    let cases: [(&str, Opens, &str); 8] = [
         (
             "a continue that never comes back",
             |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
@@ -1394,6 +1403,62 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             "no exit",
             |a, _| vec![loop_entry("once"), back(a)],
             "once = once / A once\n\nA = %s\"a\"",
+        ),
+        (
+            "a continue that pushes as well as replacing, which the engine takes as a push",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![a]],
+                        p: Some("once".into()),
+                        r: Some("once".into()),
+                        ..Default::default()
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a continue that only peeks and comes back, taking nothing",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![a]],
+                        b: 1,
+                        r: Some("once".into()),
+                        ..Default::default()
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once ]",
+        ),
+        (
+            "the empty exit before the continue, which it shadows",
+            |a, _| vec![loop_entry("once"), AltSpec::new(), back(a)],
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "the entry after a continue",
+            |a, _| vec![back(a), loop_entry("once"), AltSpec::new()],
+            "once = [ A once / once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a continue whose route a function decides",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        r_fn: Some(std::sync::Arc::new(|_, _| None)),
+                        ..back(a)
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
         ),
     ];
     for (what, opens, want) in cases {
@@ -1450,6 +1515,63 @@ fn abnf_does_not_read_a_loop_whose_helpers_never_come_back_as_one() {
          r-gen1-star-item-alt0 = item r-gen1-star-item-alt0-step1\n\
          r-gen1-star-item-alt0-step1 = \"\"\n\nX = %s\"x\"",
         "helpers that never come back:\n{out}"
+    );
+    assert!(!out.contains('*'), "read as a repetition:\n{out}");
+    assert_rfc5234_shape(&out);
+}
+
+/// A rule item's loop whose way back is guarded is no loop either: the
+/// step replaces with the loop only under a condition, `n.never == 1`,
+/// which nothing sets, so the iteration can end after one item. The
+/// compiler puts conditions on a loop's own continues, never on its
+/// helpers; a helper's way back is read only when it is taken whatever
+/// the state. It renders as debug's main emits it, with no repetition.
+#[test]
+fn abnf_does_not_read_a_loop_whose_way_back_is_guarded_as_one() {
+    let mut parser = Tabnas::new();
+    let x = parser.token_with_source("#X", "x");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "doc",
+        AltSpec {
+            p: Some("_gen1_star_item".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![x]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(&mut parser, "_gen1_star_item", &[x], "item", end);
+    parser.define_rule("_gen1_star_item$alt0$step1", |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            r: Some("_gen1_star_item".into()),
+            c: vec![Condition {
+                path: vec!["n".into(), "never".into()],
+                op: CompareOp::Eq,
+                value: Value::Number(1.0),
+            }],
+            ..Default::default()
+        });
+    });
+    wrap_start(&mut parser, "doc");
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out,
+        "doc = r-gen1-star-item\nitem = X\n\
+         r-gen1-star-item = [ r-gen1-star-item / r-gen1-star-item-alt0 ]\n\
+         r-gen1-star-item-alt0 = item r-gen1-star-item-alt0-step1\n\
+         r-gen1-star-item-alt0-step1 = r-gen1-star-item\n\nX = %s\"x\"",
+        "a guarded way back:\n{out}"
     );
     assert!(!out.contains('*'), "read as a repetition:\n{out}");
     assert_rfc5234_shape(&out);
