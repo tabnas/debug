@@ -18,7 +18,7 @@ it:
 
 ```toml
 [dependencies]
-tabnas = { path = "../parser/rs" }
+tabnas = { package = "tabnas-parser", path = "../parser/rs" }
 tabnas-debug = { path = "../debug/rs" }
 ```
 
