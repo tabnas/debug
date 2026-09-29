@@ -427,8 +427,9 @@ recorded here as the authority rules require, and it is a divergence
 only until the other two catch up. What the Rust emitter does:
 
 1. **Content is what an alternative consumes.** `has_content` is
-   `len(s) - b > 0`, or a `p` target, or an `r` target other than the
-   rule being rendered. `{ }` and the FOLLOW peek `{ s: FOLLOW, b: 1 }`
+   `len(s) - b > 0`, or a `p` target, or any `r` target except a
+   loop's own entry, which replaces with its rule and which point 2
+   skips. `{ }` and the FOLLOW peek `{ s: FOLLOW, b: 1 }`
    are both epsilon. (The canonical still tests "`s` non-empty, or `p`,
    or `r`", which is how the entry and the peek were counted.)
 2. **The self-replace entry is skipped** when rendering its own rule: it
