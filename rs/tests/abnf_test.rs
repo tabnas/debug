@@ -2378,6 +2378,52 @@ fn abnf_does_not_read_a_loop_through_a_helper_of_another_shape_as_one() {
     }
 }
 
+/// A loop whose item is `_gen2_group$alt0`, a `$alt` rule that takes an
+/// `A` or nothing and then a `B`: the iteration takes `A B` or `B`.
+/// Inlined as a helper of the loop its empty way was dropped, `*( A B )`;
+/// nothing but a loop's inlining would inline a `$alt` rule, and one
+/// with an empty way stays a production of its own, as it always was.
+#[test]
+fn abnf_keeps_a_nullable_helper_inside_a_loop_as_a_production() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star_x".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen2_group$alt0", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        });
+    });
+    ref_loop(
+        &mut parser,
+        "_gen3_star_x",
+        &[a, b],
+        "_gen2_group$alt0",
+        end,
+    );
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = *r-gen2-group-alt0\nr-gen2-group-alt0 = [ A ] B\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
 /// A user loop over `*A` whose close phase takes a `B` and replaces the
 /// rule with itself, or ends: `H = *A [ B H ]`. The iteration's own back
 /// edges render as nothing, but the close's `r: H` is the rule again,

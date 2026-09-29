@@ -417,8 +417,9 @@ impl<'a> Emitter<'a> {
     /// for `( *A B / C )`). A user rule the iteration pushes keeps its
     /// production; a nested loop is a loop of its own; an old push-chain
     /// star stays a kept production, as does a `_plus`, which
-    /// [`Emitter::is_foldable`] judges for itself, and a synthetic rule
-    /// that repeats by a cycle of its own ([`Emitter::cycles`]).
+    /// [`Emitter::is_foldable`] judges for itself, a synthetic rule that
+    /// repeats by a cycle of its own ([`Emitter::cycles`]), and one with
+    /// an empty way through ([`Emitter::is_nullable_unfolded`]).
     ///
     /// The bound is by kept productions, not by name. A walk that
     /// stopped only at user rules and other loops reached through a
@@ -446,7 +447,11 @@ impl<'a> Emitter<'a> {
             })
             .collect();
         while let Some(name) = pending.pop() {
-            if self.bounds_loop_helpers(&name) || helpers.contains(&name) || self.cycles(&name) {
+            if self.bounds_loop_helpers(&name)
+                || helpers.contains(&name)
+                || self.cycles(&name)
+                || self.is_nullable_unfolded(&name)
+            {
                 continue;
             }
             let Some(spec) = self.rules.get(&name) else {
@@ -460,6 +465,23 @@ impl<'a> Emitter<'a> {
             }
         }
         helpers
+    }
+
+    /// A synthetic rule with an empty way through its opens, one that
+    /// takes nothing (`{ }`, or a peek it gives back), which nothing but
+    /// a loop's inlining would inline: not an optional's own helper,
+    /// which inlines as `[ … ]`, nor a foldable rule, which inlines
+    /// wherever it is referenced. Inlined as a loop's helper its empty
+    /// way was dropped, `*( A B )` for an iteration that also takes `B`
+    /// alone, so it stays a production of its own, referenced by name,
+    /// as it always was.
+    fn is_nullable_unfolded(&self, name: &str) -> bool {
+        !is_helper(name, "opt")
+            && !self.is_foldable(name)
+            && self
+                .rules
+                .get(name)
+                .is_some_and(|spec| spec.open.iter().any(|alt| !has_content(alt, name, false)))
     }
 
     /// A synthetic rule that reaches itself again through synthetic rules

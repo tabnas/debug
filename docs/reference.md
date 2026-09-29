@@ -495,10 +495,12 @@ only until the other two catch up. What the Rust emitter does:
    foldable group the iteration pushes, and the `$alt` / `$step` chain
    the compiler gives a group whose alternative starts with a rule
    (`( *A B / C )` has one). A kept production inside the iteration, a
-   user rule, a nested loop, an old push-chain star or a synthetic rule
-   that repeats by a cycle of its own, not through the loop, stays a
-   reference by name with its own production, and nothing beyond it is
-   reached. A `_plus` is judged for itself.
+   user rule, a nested loop, an old push-chain star, a synthetic rule
+   that repeats by a cycle of its own, not through the loop, or a
+   `$alt` rule with an empty way through, which only a loop would
+   render inline, dropping its empty way, stays a reference by name
+   with its own production, and the walk goes no further. A `_plus` is
+   judged for itself.
 
    **Rendering.** The loop is rendered wherever it is referenced as a
    repetition of its iteration: `*A` and `*"a"` when the iteration is
@@ -588,12 +590,14 @@ And what it keeps:
 - a plus over a different item that renders the same keeps its
   production
 
-Four more pin the bound: a group with a `$alt` chain of its own inside
+Five more pin the bound: a group with a `$alt` chain of its own inside
 a loop renders as `top = *( *A B / C ) D`, the plus over it as
 `top = 1*( *A B / C ) D`, a plus whose item holds an old push-chain
-star as `top = 1*( B r-gen1-star-A C )`, and a loop over a helper that
+star as `top = 1*( B r-gen1-star-A C )`, a loop over a helper that
 repeats by its own cycle as `top = *r-gen2-group-alt0` with
-`r-gen2-group-alt0 = A r-gen2-group-alt0 / B`. No shared `test/spec` fixture pins
+`r-gen2-group-alt0 = A r-gen2-group-alt0 / B`, and a loop over a `$alt`
+rule with an empty way as `top = *r-gen2-group-alt0` with
+`r-gen2-group-alt0 = [ A ] B`. No shared `test/spec` fixture pins
 them yet: all three runtimes run those, and two do not render the loop
 yet. When TypeScript and Go follow, the shapes move to `test/spec` and
 this section becomes history like the one above it.
