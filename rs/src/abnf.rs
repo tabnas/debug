@@ -275,7 +275,8 @@ impl<'a> Emitter<'a> {
         }
         let mut known = BTreeMap::new();
         let (mut continues, mut exit, mut shadowed) = (false, false, false);
-        for alt in rest {
+        let dead = shadowed_by_peeks(&spec.open, rule);
+        for (index, alt) in rest.iter().enumerate() {
             // The compiler writes one entry; a second can never be taken
             // (the first set its counter) and is neither continue nor exit.
             if is_dynamic(alt) || is_loop_entry(alt, rule) {
@@ -297,7 +298,11 @@ impl<'a> Emitter<'a> {
                     shadowed = true;
                 }
             } else if !shadowed && self.continues_loop(alt, rule, &mut known) {
-                continues = true;
+                // A continue a FOLLOW peek before it covers never runs, and
+                // does not make the rule a loop, though it still renders:
+                // it is the source's own alternative, as `*( "a" / "b" )`
+                // with `b` in FOLLOW keeps its `B`.
+                continues |= !dead[index + 1];
             } else {
                 return false;
             }
@@ -321,7 +326,11 @@ impl<'a> Emitter<'a> {
         rule: &str,
         known: &mut BTreeMap<String, Back>,
     ) -> bool {
-        if alt.p.is_some() || alt.b > alt.s.len() || !is_guarded_as_compiled(alt) {
+        if alt.p.is_some()
+            || alt.b > alt.s.len()
+            || !alt.n.is_empty()
+            || !is_guarded_as_compiled(alt)
+        {
             return false;
         }
         let consumed = alt.s.len() > alt.b;
@@ -381,7 +390,7 @@ impl<'a> Emitter<'a> {
                 }
                 spec.close.iter().fold(Back::Progress, |acc, alt| {
                     let back = match alt.r.as_deref() {
-                        Some(target) if alt.p.is_none() && is_plain_way(alt) => self
+                        Some(target) if alt.p.is_none() && is_helper_way(alt) => self
                             .back_through(target, rule, known)
                             .or_progress(alt.s.len() > alt.b),
                         _ => Back::Never,
@@ -395,7 +404,7 @@ impl<'a> Emitter<'a> {
         }
         let mut answer = Back::Progress;
         for alt in &spec.open {
-            let back = if !is_plain_way(alt) {
+            let back = if !is_helper_way(alt) {
                 Back::Never
             } else if alt.p.is_some() {
                 match close_back(known) {
@@ -1076,6 +1085,39 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// The iteration helper `helper` comes back to the loop `rule` taking
+    /// nothing on the way, as the compiler's does: its one close replaces
+    /// with the next step, and each step's one open replaces onward,
+    /// matching no token, until `rule`.
+    fn returns_bare(&self, helper: &RuleSpec, rule: &str) -> bool {
+        let bare =
+            |alt: &AltSpec| alt.s.is_empty() && alt.b == 0 && alt.p.is_none() && is_helper_way(alt);
+        let [close] = helper.close.as_slice() else {
+            return false;
+        };
+        if !bare(close) {
+            return false;
+        }
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        let mut next = close.r.as_deref();
+        while let Some(name) = next {
+            if name == rule {
+                return true;
+            }
+            let Some(spec) = self.rules.get(name) else {
+                return false;
+            };
+            let [open] = spec.open.as_slice() else {
+                return false;
+            };
+            if !visited.insert(name) || !bare(open) || !spec.close.iter().all(is_idle) {
+                return false;
+            }
+            next = open.r.as_deref();
+        }
+        false
+    }
+
     /// The one item the loop `rule` repeats, as the compiler builds it:
     /// the token its terminal continues consume (`{ s: [A], r: rule }`,
     /// or `{ s: [A, X], b: 1, r: rule }` with a token of lookahead),
@@ -1101,6 +1143,11 @@ impl<'a> Emitter<'a> {
                     return None;
                 };
                 if !open.s.is_empty() || open.r.is_some() || !is_plain_way(open) {
+                    return None;
+                }
+                // The whole iteration is the item: the way back takes
+                // nothing more (`*( item B )` is no repetition of `item`).
+                if !self.returns_bare(helper, rule) {
                     return None;
                 }
                 Item::Rule(open.p.clone()?)
@@ -1326,6 +1373,48 @@ fn is_idle(alt: &AltSpec) -> bool {
     alt.s.is_empty() && alt.b == 0 && alt.p.is_none() && alt.r.is_none() && is_plain_way(alt)
 }
 
+/// An alternative on a loop's way back, as the compiler writes one: a
+/// plain way ([`is_plain_way`]) that sets no counter but the loop's own
+/// `rep` (the iteration helper counts it). Another counter could turn a
+/// guarded continue off for the next iteration.
+fn is_helper_way(alt: &AltSpec) -> bool {
+    is_plain_way(alt) && alt.n.keys().all(|counter| counter == "rep")
+}
+
+/// For each open alternative of the loop `rule`, whether it is a continue
+/// that a FOLLOW peek before it covers, and so never runs: the peek
+/// matches wherever the continue would. The compiler writes such dead
+/// continues where FIRST meets FOLLOW (`{ s: [C], b: 1 }`, then
+/// `{ s: [C], b: 1, r: H$alt0 }`, with the live continues that look
+/// further ahead before both); a rule is a loop only when some continue
+/// is live, and a hand-built one with nothing but dead ones (`{ s: A,
+/// b: 1 }` before `{ s: A, r: H }`) takes no item at all.
+fn shadowed_by_peeks(open: &[AltSpec], rule: &str) -> Vec<bool> {
+    let mut peeks: Vec<&[Vec<Tin>]> = Vec::new();
+    open.iter()
+        .map(|alt| {
+            if !has_content(alt, rule, true) {
+                if !alt.s.is_empty() {
+                    peeks.push(&alt.s);
+                }
+                false
+            } else {
+                peeks.iter().any(|peek| covers(peek, &alt.s))
+            }
+        })
+        .collect()
+}
+
+/// The token sequence `peek` matches wherever `item` does: it is no
+/// longer, and each of its slots holds every token `item`'s does.
+fn covers(peek: &[Vec<Tin>], item: &[Vec<Tin>]) -> bool {
+    peek.len() <= item.len()
+        && peek
+            .iter()
+            .zip(item)
+            .all(|(slot, other)| other.iter().all(|tin| slot.contains(tin)))
+}
+
 /// An alternative a loop's helper can come back through: read from the
 /// spec alone, and taken whatever the rule's state, with no condition of
 /// any kind.
@@ -1344,7 +1433,7 @@ fn is_plain_way(alt: &AltSpec) -> bool {
 /// leave the counter unset wherever that token is not next), pushes
 /// nothing, replaces `rule` with
 /// itself, is guarded by `n.rep == 0` and by nothing else, and sets that
-/// counter to 1 — allocating the node and counting the iteration on the
+/// counter to 1 and no other — allocating the node and counting the iteration on the
 /// way in. A further condition, in `c` or any other channel, may keep
 /// the entry from running, and with it the counter it sets, which the
 /// continues may be guarded on. It is
@@ -1358,6 +1447,7 @@ fn is_loop_entry(alt: &AltSpec, rule: &str) -> bool {
         && alt.b == 0
         && alt.p.is_none()
         && alt.r.as_deref() == Some(rule)
+        && alt.n.len() == 1
         && alt.n.get("rep") == Some(&1)
         && matches!(alt.c.as_slice(), [guard] if is_rep_guard(guard))
         && alt.c_ref.is_none()

@@ -446,7 +446,7 @@ only until the other two catch up. What the Rust emitter does:
    - **The entry comes first, and only once.** It matches no token, not even a
      peeked one, pushes nothing, replaces the rule with itself, carries
      the guard `n.rep == 0` and no other condition, and sets that
-     counter to 1. A user rule's own non-consuming self-replace, a
+     counter to 1 and no other. A user rule's own non-consuming self-replace, a
      guarded or counted state transition without that guard, is no
      loop and renders as a reference to the rule, as it always did. A
      second entry is neither a continue nor an exit: the first has set
@@ -459,8 +459,13 @@ only until the other two catch up. What the Rust emitter does:
      `r` beside it, which the engine does not follow. A continue
      carries no guard but the compiler's suffix-debt counter
      (`n.debt_… == 0`), since any other may contradict the state the
-     entry leaves, as `n.rep == 0` does, and a helper's way back
-     carries no condition at all.
+     entry leaves, as `n.rep == 0` does, and sets no counter. A
+     helper's way back carries no condition at all and sets no counter
+     but `rep`. A continue that a FOLLOW peek before it covers never
+     runs: the compiler writes such dead continues where a token can
+     both start the item and follow the loop, and they render as the
+     source's alternatives, but a rule is a loop only when some
+     continue is live.
    - **The empty exit `{ }`, with no condition**, and no continue after
      it, since it takes whatever comes. FOLLOW peeks may stand among
      the exits, before the continues too: the compiler puts one there
@@ -504,8 +509,9 @@ only until the other two catch up. What the Rust emitter does:
    **Counted repetitions.** A `_plus` helper over a loop folds too when
    it is the compiler's construction: its chain (the helper and its
    `$step` helpers) consumes or pushes exactly the loop's own item, the
-   token its continue consumes or the rule its iteration helper pushes,
-   then pushes the loop, and its walk meets no cycle. Such a helper is
+   token its continue consumes or the rule its iteration helper pushes
+   when the way back takes nothing more, then pushes the loop, and its
+   walk meets no cycle. Such a helper is
    written back as the `1*A` it was compiled from (a `_rep` helper as `2*A`):
    element by element it is `A *A`, the same language, but the `abnf`
    crate compiles `A *A` and `1*A` to different recognisers, and where
@@ -561,7 +567,7 @@ each rendering as it always did:
 - a close in the entry's whole shape on a rule without the scaffold,
   `odd = A [ odd ]`
 - a rule with the entry and not the rest of the scaffold, `once = [
-  once / A ]` for the entry, `{ s: A }` and `{ }`, and sixteen more,
+  once / A ]` for the entry, `{ s: A }` and `{ }`, and eighteen more,
   one for each way the scaffold can fail
 - a rule item's loop whose step never comes back, and one whose step
   comes back only under a condition
@@ -575,7 +581,8 @@ And what it keeps:
 - a user loop whose close re-enters it renders `once = *A [ B once ]`
 - a synthetic loop as the start rule renders `r-gen1-star-A = *A`
 - a plus over a different item that renders the same keeps its
-  production
+  production, as does one whose loop takes more than its item,
+  `item *( item B )`
 
 Four more pin the bound: a group with a `$alt` chain of its own inside
 a loop renders as `top = *( *A B / C ) D`, the plus over it as

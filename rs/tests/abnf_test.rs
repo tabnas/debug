@@ -1383,6 +1383,9 @@ fn rule_of_opens(opens: Opens) -> String {
 /// - a continue is guarded on `n.rep == 0`, which the entry has already
 ///   left behind, and a continue may carry no guard but the compiler's
 ///   suffix-debt counter;
+/// - a FOLLOW peek before the only continue covers it, so it never runs;
+/// - the entry sets a further counter, which turns off a continue
+///   guarded on it;
 /// - a function decides the continue's route.
 ///
 /// Read as a loop on its entry alone, all but one rendered as `*A`, which
@@ -1405,7 +1408,7 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             ..Default::default()
         }
     }
-    let cases: [(&str, Opens, &str); 17] = [
+    let cases: [(&str, Opens, &str); 19] = [
         (
             "a continue that never comes back",
             |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
@@ -1593,6 +1596,42 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
                     AltSpec {
                         c: vec![Condition {
                             path: vec!["n".into(), "rep".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(0.0),
+                        }],
+                        ..back(a)
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a FOLLOW peek before the only continue, covering it",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![a]],
+                        b: 1,
+                        ..Default::default()
+                    },
+                    back(a),
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an entry that sets a further counter a continue is guarded on",
+            |a, _| {
+                let mut entry = loop_entry("once");
+                entry.n.insert("debt_x".into(), 1);
+                vec![
+                    entry,
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "debt_x".into()],
                             op: CompareOp::Eq,
                             value: Value::Number(0.0),
                         }],
@@ -2162,6 +2201,81 @@ fn abnf_keeps_a_plus_over_a_different_item_as_a_production() {
     assert_eq!(
         abnf(&parser),
         "top = r-gen6-plus--gen5-group\nr-gen1-star-A = [ A r-gen1-star-A ]\nr-gen6-plus--gen5-group = B r-gen1-star-A C r-gen6-plus--gen5-group-step1\nr-gen6-plus--gen5-group-step1 = *( B r-gen1-star-A C )\n\nA = %s\"a\"\nB = %s\"b\"\nC = %s\"c\""
+    );
+}
+
+/// A `_plus` whose chain pushes `item` and ends in a loop whose
+/// iteration pushes `item` and then takes a `B` on its way back: the loop
+/// is `*( item B )`, and the plus is `item *( item B )`, which takes
+/// `item` alone. Written as `1*( item B )` it would require the `B`; the
+/// loop's whole iteration is not the plus's item, and the plus keeps its
+/// production.
+#[test]
+fn abnf_keeps_a_plus_whose_loop_takes_more_than_its_item_as_a_production() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen4_plus_item".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![a]],
+            ..Default::default()
+        },
+        None,
+    );
+    let rule = "_gen3_star_item".to_string();
+    parser.define_rule(rule.clone(), move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry(&rule));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            b: 1,
+            r: Some(format!("{rule}$alt0")),
+            ..Default::default()
+        });
+        loop_exits(spec, end);
+    });
+    parser.define_rule("_gen3_star_item$alt0", |spec| {
+        spec.clear();
+        spec.add_open(counted(
+            AltSpec {
+                p: Some("item".into()),
+                ..Default::default()
+            },
+            0,
+        ));
+        spec.add_close(counted(
+            AltSpec {
+                r: Some("_gen3_star_item$alt0$step1".into()),
+                ..Default::default()
+            },
+            1,
+        ));
+    });
+    parser.define_rule("_gen3_star_item$alt0$step1", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![b]],
+            r: Some("_gen3_star_item".into()),
+            ..Default::default()
+        });
+    });
+    plus_chain(&mut parser, "_gen4_plus_item", "item", "_gen3_star_item");
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen4-plus-item\nitem = A\nr-gen4-plus-item = item r-gen4-plus-item-step1\nr-gen4-plus-item-step1 = *( item B )\n\nA = %s\"a\"\nB = %s\"b\""
     );
 }
 
