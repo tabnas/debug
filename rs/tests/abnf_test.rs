@@ -1366,6 +1366,9 @@ fn rule_of_opens(opens: Opens) -> String {
 /// - the empty exit `{ }` comes before the continue, which it shadows;
 /// - the entry comes after a continue, not first as the compiler puts
 ///   it;
+/// - an empty exit with a condition comes before the continue, which it
+///   shadows whenever the condition holds;
+/// - a function decides the entry's route;
 /// - a function decides the continue's route.
 ///
 /// Read as a loop on its entry alone, all but one rendered as `*A`, which
@@ -1388,7 +1391,7 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             ..Default::default()
         }
     }
-    let cases: [(&str, Opens, &str); 8] = [
+    let cases: [(&str, Opens, &str); 10] = [
         (
             "a continue that never comes back",
             |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
@@ -1445,6 +1448,39 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             "the entry after a continue",
             |a, _| vec![back(a), loop_entry("once"), AltSpec::new()],
             "once = [ A once / once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an empty exit with a condition before the continue, which shadows it when the condition holds",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "x".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(0.0),
+                        }],
+                        ..Default::default()
+                    },
+                    back(a),
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an entry whose route a function decides",
+            |a, _| {
+                vec![
+                    AltSpec {
+                        r_fn: Some(std::sync::Arc::new(|_, _| None)),
+                        ..loop_entry("once")
+                    },
+                    back(a),
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
         ),
         (
             "a continue whose route a function decides",
@@ -1574,6 +1610,44 @@ fn abnf_does_not_read_a_loop_whose_way_back_is_guarded_as_one() {
         "a guarded way back:\n{out}"
     );
     assert!(!out.contains('*'), "read as a repetition:\n{out}");
+    assert_rfc5234_shape(&out);
+}
+
+/// A `_plus` helper that repeats by a cycle of its own, not through a
+/// loop, keeps its production: here it re-enters itself on `A` and exits
+/// on anything else, which takes any number of `A`. Folded, as a helper
+/// that reaches no kept repetition was, its back edge rendered as
+/// nothing and the rule came out as one `A`. It renders as debug's main
+/// emits it.
+#[test]
+fn abnf_keeps_a_plus_helper_that_repeats_by_its_own_cycle() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    simple_rule(
+        &mut parser,
+        "rep",
+        AltSpec {
+            p: Some("_gen1_plus_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen1_plus_term", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("_gen1_plus_term".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+    });
+    wrap_start(&mut parser, "rep");
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out, "rep = r-gen1-plus-term\nr-gen1-plus-term = [ A r-gen1-plus-term ]\n\nA = %s\"a\"",
+        "a plus helper's own cycle:\n{out}"
+    );
     assert_rfc5234_shape(&out);
 }
 

@@ -449,8 +449,9 @@ only until the other two catch up. What the Rust emitter does:
    is a rule with the entry and not the rest: a continue that never
    comes back (with the entry, `{ s: A }` and `{ }` take one `A` or
    nothing), one continue of several that does not, one that comes back
-   having taken nothing, no exit, the empty exit `{ }` before a
-   continue, which it shadows, or the entry anywhere but first. A
+   having taken nothing, no exit, an empty exit before a continue,
+   which it shadows whenever its condition, if it has one, holds, or
+   the entry anywhere but first. A
    FOLLOW peek before the continues shadows only what it peeks: the
    compiler puts one there where a keyword must end the loop rather
    than be taken as an item (`*word "end"` with `word = 1*ALPHA`). A continue comes back
@@ -459,7 +460,8 @@ only until the other two catch up. What the Rust emitter does:
    with `H$alt0$step1`, which replaces with `H`). A push is no back
    edge, even with an `r` beside it, which the engine does not follow.
    A way back is read only where the spec decides it: an alternative
-   whose route or backtrack a function decides makes the rule no loop,
+   whose route or backtrack a function decides, the entry included,
+   makes the rule no loop,
    and a helper's way back must carry no condition, as the compiler's
    never do. The helpers of a loop `H` are the synthetic
    rules its iteration reaches short of a kept production, bounded by
@@ -478,7 +480,8 @@ only until the other two catch up. What the Rust emitter does:
    (inlined when foldable) followed by its close continuation, and the
    back edges (`r: H$alt0$step1`, then `r: H`) render nothing. `H`,
    `H$alt0` and `H$alt0$step1` are never productions of their own. A
-   `_plus` helper over a loop folds too, and is written back as the
+   `_plus` helper over a loop folds too, when its walk reaches the loop
+   and meets no cycle of its own on the way, and is written back as the
    `1*A` it was compiled from (a `_rep` helper as `2*A`): element by
    element it is `A *A`, the same language, but the `abnf` crate compiles
    `A *A` and `1*A` to different recognisers, and where `A` is nullable

@@ -251,7 +251,9 @@ impl<'a> Emitter<'a> {
     /// comes and so shadows every alternative after it. A FOLLOW peek
     /// shadows only what it peeks, and the compiler puts one before the
     /// continues where a keyword must end the loop rather than be taken
-    /// as an item (`*word "end"` with `word = 1*ALPHA`). The
+    /// as an item (`*word "end"` with `word = 1*ALPHA`). An empty exit
+    /// with a condition shadows them too, whenever the condition holds,
+    /// and a rule with one before a continue is no loop. The
     /// entry alone read a rule as a loop whose continue never came back:
     /// the entry, `{ s: A }` and `{ }` take `A` at most once, and were
     /// emitted as `*A`. A continue that does not come back ends the rule
@@ -264,7 +266,7 @@ impl<'a> Emitter<'a> {
         let Some((first, rest)) = spec.open.split_first() else {
             return false;
         };
-        if !is_loop_entry(first, rule) {
+        if !is_loop_entry(first, rule) || is_dynamic(first) {
             return false;
         }
         let mut known = BTreeMap::new();
@@ -275,7 +277,9 @@ impl<'a> Emitter<'a> {
             }
             if !has_content(alt, rule, true) {
                 exit = true;
-                shadowed |= alt.s.is_empty() && is_plain_way(alt);
+                // An empty exit takes whatever comes, whenever its
+                // condition, if it has one, holds.
+                shadowed |= alt.s.is_empty();
             } else if !shadowed && self.continues_loop(alt, rule, &mut known) {
                 continues = true;
             } else {
@@ -509,39 +513,65 @@ impl<'a> Emitter<'a> {
     /// The helper folds to `A *A` when that star is a loop and nothing
     /// else it reaches is a kept repetition; with an old-shape star, a
     /// kept production, the helper stays a production too, as it always
-    /// has. Reaches through the chain steps (`_plus$step1`) a non-terminal
+    /// has. It folds only when its walk reaches a loop, and meets no
+    /// cycle of its own on the way: a helper that re-enters itself, or
+    /// a chain of helpers that comes back round without passing through
+    /// a loop, repeats by that cycle, and folded, the cycle's back edge
+    /// rendered as nothing, so `A*` came out as one `A`. Reaches through the chain steps (`_plus$step1`) a non-terminal
     /// item puts between the helper and its star, and through the group
     /// it pushes and that group's own `$alt` / `$step` chain, which fold:
     /// the `_plus` over `( *A B / C )` is `1*( *A B / C )`. Refusing
     /// every `$alt` name here refused that chain, and the helper came out
     /// as `X *X`, which does not round-trip on a nullable item.
     fn plus_folds(&self, name: &str) -> bool {
-        let mut visited: BTreeSet<String> = BTreeSet::new();
-        let mut pending: Vec<String> = vec![name.to_owned()];
-        while let Some(current) = pending.pop() {
-            if !visited.insert(current.clone()) {
-                continue;
-            }
-            let Some(spec) = self.rules.get(&current) else {
+        // A depth-first walk with an explicit stack: `open` holds the
+        // rules on the current path, so reaching one again is a cycle;
+        // `done` those whose walk has finished, which a second path may
+        // reach without one.
+        let mut open: BTreeSet<String> = BTreeSet::new();
+        let mut done: BTreeSet<String> = BTreeSet::new();
+        let mut reached_loop = false;
+        let mut stack: Vec<(String, Vec<String>)> = Vec::new();
+        let targets = |current: &str| -> Vec<String> {
+            self.rules
+                .get(current)
+                .map(|spec| {
+                    spec.open
+                        .iter()
+                        .chain(spec.close.iter())
+                        .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref()))
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        open.insert(name.to_owned());
+        stack.push((name.to_owned(), targets(name)));
+        while let Some((current, pending)) = stack.last_mut() {
+            let Some(target) = pending.pop() else {
+                open.remove(current.as_str());
+                done.insert(current.clone());
+                stack.pop();
                 continue;
             };
-            for alt in spec.open.iter().chain(spec.close.iter()) {
-                let Some(target) = alt.p.as_deref().or(alt.r.as_deref()) else {
-                    continue;
-                };
-                if !self.rules.contains_key(target) || !self.is_synthetic(target) {
-                    continue;
-                }
-                if self.loops.contains(target) || self.loop_helpers.contains(target) {
-                    continue;
-                }
-                if self.is_kept_repetition(target) {
-                    return false;
-                }
-                pending.push(target.to_owned());
+            if !self.rules.contains_key(&target) || !self.is_synthetic(&target) {
+                continue;
             }
+            if self.loops.contains(&target) || self.loop_helpers.contains(&target) {
+                reached_loop |= self.loops.contains(&target);
+                continue;
+            }
+            if self.is_kept_repetition(&target) || open.contains(&target) {
+                return false;
+            }
+            if done.contains(&target) {
+                continue;
+            }
+            open.insert(target.clone());
+            let next = targets(&target);
+            stack.push((target, next));
         }
-        true
+        reached_loop
     }
 
     /// A rule rendered where it is referenced and never as a production
