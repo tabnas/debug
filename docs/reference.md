@@ -519,16 +519,16 @@ only until the other two catch up. What the Rust emitter does:
    production, whose body is the repetition followed by its close
    alternatives, as any rule's are. A close that replaces with the rule
    re-enters it, which is no back edge of the iteration, and renders as
-   the rule's name: `H = *A [ B H ]`. A synthetic loop renders inline,
-   wherever a rule refers to it, with no name of its own to render
-   there, so a synthetic rule whose closes may run it again is no loop
-   and keeps its production: a close that reaches it again, one whose
-   route a function decides, a close push, which comes back to the
-   close phase when the pushed rule ends and runs the closes again, and
-   a close that reaches a helper whose route a function decides or
-   whose own close pushes. The compiler's loops have no closes. The
-   start rule is always a production, a synthetic loop included, since
-   no rule encloses it to render it inline.
+   the rule's name: `H = *A [ B H ]`. The compiler's loops have no
+   closes, and a synthetic rule is a loop only when any closes it has
+   do nothing at all. A synthetic loop renders inline, wherever a rule
+   refers to it, with no name of its own to render there, and the
+   rendering would drop a close that could run it again: one that
+   re-enters it, directly or through helpers, one that pushes, which
+   comes back to the close phase when the pushed rule ends and runs the
+   closes again, or one a function routes. The start rule is always a
+   production, a synthetic loop included, since no rule encloses it to
+   render it inline.
 4. **A synthesised helper's kind is read from its own name segment**,
    the word after `_gen<n>_` in the part before any `$`, never from a
    name it embeds. A repetition's helper is named after its item: a star

@@ -263,7 +263,9 @@ impl<'a> Emitter<'a> {
     /// repeats nothing, so a rule with either is no repetition. An
     /// alternative whose route or backtrack a function decides (`p_fn`,
     /// `r_fn`, `b_fn` and their `_match` forms, a modifier `h`) cannot be
-    /// read, and a rule with one is no loop either.
+    /// read, and a rule with one is no loop either. An exit gives back
+    /// exactly what it peeks, and a synthetic loop's closes, if it has
+    /// any, do nothing at all ([`is_idle`]), as the compiler's never do.
     fn is_loop(&self, rule: &str, spec: &RuleSpec) -> bool {
         let Some((first, rest)) = spec.open.split_first() else {
             return false;
@@ -283,7 +285,9 @@ impl<'a> Emitter<'a> {
                 // The compiler never guards an exit: one with a condition
                 // may never stop the rule, and one before a continue
                 // shadows it whenever the condition holds.
-                if !is_plain_way(alt) {
+                // The compiler's exits give back exactly what they peek:
+                // the empty exit nothing, a FOLLOW peek its tokens.
+                if !is_plain_way(alt) || alt.b != alt.s.len() {
                     return false;
                 }
                 // Only the empty exit stops the rule whatever comes next,
@@ -298,59 +302,7 @@ impl<'a> Emitter<'a> {
                 return false;
             }
         }
-        continues && exit && (!self.is_synthetic(rule) || !self.closes_reenter(rule, spec))
-    }
-
-    /// A close alternative of `rule` may run `rule` again: it pushes,
-    /// which comes back to the close phase when the pushed rule ends and
-    /// runs the closes again; its route is a function's to decide; or it
-    /// reaches `rule` again, directly or through synthetic helpers, or
-    /// through a helper whose route a function decides or whose close
-    /// pushes. A
-    /// user loop renders a re-entry as a reference to its own production
-    /// (`H = *A [ B H ]`), but a synthetic loop is inlined wherever it is
-    /// referenced and has no name to refer back to, so a synthetic rule
-    /// whose closes may run it again is no loop and keeps its production.
-    /// The compiler's loops have no closes.
-    fn closes_reenter(&self, rule: &str, spec: &RuleSpec) -> bool {
-        if spec
-            .close
-            .iter()
-            .any(|alt| alt.p.is_some() || is_dynamic(alt))
-        {
-            return true;
-        }
-        let mut visited: BTreeSet<&str> = BTreeSet::new();
-        let mut pending: Vec<&str> = spec
-            .close
-            .iter()
-            .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref()))
-            .collect();
-        while let Some(name) = pending.pop() {
-            if name == rule {
-                return true;
-            }
-            if !self.is_synthetic(name) || !visited.insert(name) {
-                continue;
-            }
-            if let Some(spec) = self.rules.get(name) {
-                // A helper whose route a function decides may come back
-                // to `rule` by a way the spec does not show, and one whose
-                // close pushes runs its closes again, over and over.
-                if spec.open.iter().chain(spec.close.iter()).any(is_dynamic)
-                    || spec.close.iter().any(|alt| alt.p.is_some())
-                {
-                    return true;
-                }
-                pending.extend(
-                    spec.open
-                        .iter()
-                        .chain(spec.close.iter())
-                        .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref())),
-                );
-            }
-        }
-        false
+        continues && exit && (!self.is_synthetic(rule) || spec.close.iter().all(is_idle))
     }
 
     /// A continue comes back to its loop `rule` having made progress. It
@@ -369,7 +321,7 @@ impl<'a> Emitter<'a> {
         rule: &str,
         known: &mut BTreeMap<String, Back>,
     ) -> bool {
-        if alt.p.is_some() || !is_guarded_as_compiled(alt) {
+        if alt.p.is_some() || alt.b > alt.s.len() || !is_guarded_as_compiled(alt) {
             return false;
         }
         let consumed = alt.s.len() > alt.b;
@@ -922,7 +874,7 @@ impl<'a> Emitter<'a> {
         // The loop's own name is seen so that the iteration's back edges
         // render nothing; a close that re-enters a user loop is no back
         // edge but the rule again, and renders as its name. (A synthetic
-        // loop's closes never re-enter it: see `Emitter::closes_reenter`.)
+        // loop's closes do nothing at all: see [`is_idle`].)
         let cont = if self.is_synthetic(name) {
             self.close_cont(name, seen)
         } else {
@@ -1125,7 +1077,8 @@ impl<'a> Emitter<'a> {
     }
 
     /// The one item the loop `rule` repeats, as the compiler builds it:
-    /// a token its one terminal continue consumes (`{ s: [A], r: rule }`),
+    /// the token its terminal continues consume (`{ s: [A], r: rule }`,
+    /// or `{ s: [A, X], b: 1, r: rule }` with a token of lookahead),
     /// or the rule its iteration helper pushes, after a continue that
     /// peeks one of that rule's FIRST tokens (`{ s: [A], b: 1, r:
     /// rule$alt0 }`, `rule$alt0` opening `{ p: item }`). None for a loop
@@ -1137,11 +1090,11 @@ impl<'a> Emitter<'a> {
             if !has_content(alt, rule, true) {
                 continue;
             }
-            let this = if alt.r.as_deref() == Some(rule) && alt.b == 0 {
-                let [slot] = alt.s.as_slice() else {
-                    return None;
-                };
-                Item::Token(slot.clone())
+            let this = if alt.r.as_deref() == Some(rule) && alt.s.len() == alt.b + 1 {
+                // It consumes its one token and gives back any it peeked
+                // after it (`{ s: [A, X], b: 1 }`, where the compiler looks
+                // two tokens ahead).
+                Item::Token(alt.s[0].clone())
             } else if alt.s.len() == alt.b {
                 let helper = self.rules.get(alt.r.as_deref()?)?;
                 let [open] = helper.open.as_slice() else {
@@ -1357,6 +1310,20 @@ fn is_debt_guard(condition: &Condition) -> bool {
     matches!(condition.path.as_slice(), [bag, counter] if bag == "n" && counter.starts_with("debt_"))
         && condition.op == CompareOp::Eq
         && matches!(condition.value, Value::Number(count) if count == 0.0)
+}
+
+/// An alternative that does nothing: it matches no token, pushes and
+/// replaces nothing, and carries no condition. The compiler's loops have
+/// no closes, and a synthetic rule is a loop only when its closes, if it
+/// has any, are all idle. A synthetic loop renders inline, wherever a
+/// rule refers to it, with no name of its own to render there, so a
+/// close that could run it again would be lost: one that re-enters it,
+/// directly or through helpers, one that pushes, which comes back to the
+/// close phase when the pushed rule ends and runs the closes again, or
+/// one a function routes. Each was found in turn, and the compiler writes
+/// none of them.
+fn is_idle(alt: &AltSpec) -> bool {
+    alt.s.is_empty() && alt.b == 0 && alt.p.is_none() && alt.r.is_none() && is_plain_way(alt)
 }
 
 /// An alternative a loop's helper can come back through: read from the
