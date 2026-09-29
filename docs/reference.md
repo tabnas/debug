@@ -438,13 +438,21 @@ only until the other two catch up. What the Rust emitter does:
    a loop has an entry to skip: a rule that is not one (its open
    alternatives hold no entry) keeps every alternative, a close in the
    entry's shape included, so `odd = A [ odd ]` renders as it always did.
-3. **A rule with such an entry is a loop**, decided by shape rather than
-   by name, and the guard is part of the shape: the entry consumes
-   nothing, pushes nothing, replaces the rule with itself, carries the
-   guard `n.rep == 0`, and sets that counter to 1. A user rule's own
-   non-consuming self-replace, a guarded or counted state transition
-   without that guard, is not a loop and renders as a reference to the
-   rule, as it always did. The helpers of a loop `H` are the synthetic
+3. **A rule whose open alternatives are the loop's whole scaffold is a
+   loop**, decided by shape rather than by name: the entry, continues
+   that each come back to the rule, and an exit. The guard is part of
+   the entry's shape: the entry consumes nothing, pushes nothing,
+   replaces the rule with itself, carries the guard `n.rep == 0`, and
+   sets that counter to 1. A user rule's own non-consuming self-replace,
+   a guarded or counted state transition without that guard, is not a
+   loop and renders as a reference to the rule, as it always did. Nor
+   is a rule with the entry and not the rest: a continue that never
+   comes back (with the entry, `{ s: A }` and `{ }` take one `A` or
+   nothing), one continue of several that does not, or no exit. A
+   continue comes back when it replaces with the rule, or with a
+   synthetic helper every way through which replaces onward to it
+   (`H$alt0`, whose close replaces with `H$alt0$step1`, which replaces
+   with `H`); a push is no back edge. The helpers of a loop `H` are the synthetic
    rules its iteration reaches short of a kept production, bounded by
    those productions and not by name: `H$alt0` and `H$alt0$step1`, the
    foldable group the iteration pushes, and the `$alt` / `$step` chain
@@ -492,12 +500,15 @@ The shapes are pinned by `rs/tests/abnf_test.rs` (`rep = *"a"`,
 `top = 1*( "a" "b" )`, `top = 1*( "a" / "b" )`, hand-built from
 the compiler's output because the emitter must never gain an ABNF
 dependency, even in a test), which check the emitted text is RFC 5234
-(no dangling `/`, legal rule names). Three more pin what the shape
-excludes: a user rule's unguarded self-replace stays `st = st / A / B`,
-a guarded close continuation stays `one = A [ one ]`, a close in the
+(no dangling `/`, legal rule names). More pin what the shape excludes:
+a user rule's unguarded self-replace stays `st = st / A / B`, a
+guarded close continuation stays `one = A [ one ]`, a close in the
 entry's whole shape on a rule that is no loop stays `odd = A [ odd ]`,
-and an old push-chain star inside a loop's group stays a kept
-production, `top = *( B r-gen1-star-A C )`. Two more pin the bound: a
+an old push-chain star inside a loop's group stays a kept production,
+`top = *( B r-gen1-star-A C )`, and a rule with the entry and not the
+rest of the scaffold renders as it always did, `once = [ once / A ]`
+for the entry, `{ s: A }` and `{ }`, as does a rule item's loop whose
+step never comes back. Two more pin the bound: a
 group with a `$alt` chain of its own inside a loop renders as
 `top = *( *A B / C ) D`, and the plus over it as
 `top = 1*( *A B / C ) D`. No shared `test/spec` fixture pins
