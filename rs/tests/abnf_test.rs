@@ -1384,6 +1384,8 @@ fn rule_of_opens(opens: Opens) -> String {
 ///   left behind, and a continue may carry no guard but the compiler's
 ///   suffix-debt counter;
 /// - a FOLLOW peek before the only continue covers it, so it never runs;
+/// - a continue consumes an empty token slot, which takes any token and
+///   renders as nothing;
 /// - the entry sets a further counter, which turns off a continue
 ///   guarded on it;
 /// - a function decides the continue's route.
@@ -1408,7 +1410,7 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             ..Default::default()
         }
     }
-    let cases: [(&str, Opens, &str); 19] = [
+    let cases: [(&str, Opens, &str); 20] = [
         (
             "a continue that never comes back",
             |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
@@ -1641,6 +1643,21 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
                 ]
             },
             "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a continue that consumes an empty token slot",
+            |_, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![]],
+                        r: Some("once".into()),
+                        ..Default::default()
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once ]",
         ),
         (
             "a continue whose route a function decides",
@@ -2205,11 +2222,11 @@ fn abnf_keeps_a_plus_over_a_different_item_as_a_production() {
 }
 
 /// A `_plus` whose chain pushes `item` and ends in a loop whose
-/// iteration pushes `item` and then takes a `B` on its way back: the loop
-/// is `*( item B )`, and the plus is `item *( item B )`, which takes
-/// `item` alone. Written as `1*( item B )` it would require the `B`; the
-/// loop's whole iteration is not the plus's item, and the plus keeps its
-/// production.
+/// iteration pushes `item` and then takes a `B` on its way back. Read as
+/// the plus over a loop it was written `1*( item B )`, which requires
+/// the `B`, where the live chain takes `item` alone. A way back that
+/// takes a token is no iteration helper the compiler writes, so the loop
+/// is no loop, and it and the plus render as debug's main emits them.
 #[test]
 fn abnf_keeps_a_plus_whose_loop_takes_more_than_its_item_as_a_production() {
     let mut parser = Tabnas::new();
@@ -2275,8 +2292,90 @@ fn abnf_keeps_a_plus_whose_loop_takes_more_than_its_item_as_a_production() {
     wrap_start(&mut parser, "top");
     assert_eq!(
         abnf(&parser),
-        "top = r-gen4-plus-item\nitem = A\nr-gen4-plus-item = item r-gen4-plus-item-step1\nr-gen4-plus-item-step1 = *( item B )\n\nA = %s\"a\"\nB = %s\"b\""
+        "top = r-gen4-plus-item\nitem = A\nr-gen3-star-item = [ r-gen3-star-item / r-gen3-star-item-alt0 ]\nr-gen3-star-item-alt0 = item r-gen3-star-item-alt0-step1\nr-gen3-star-item-alt0-step1 = B r-gen3-star-item\nr-gen4-plus-item = item r-gen4-plus-item-step1\nr-gen4-plus-item-step1 = r-gen3-star-item\n\nA = %s\"a\"\nB = %s\"b\""
     );
+}
+
+/// A loop whose continue replaces with a helper of a shape the compiler
+/// never writes: one that pushes the loop itself, and one with an empty
+/// way through beside a consuming one. The first rendered the pushed
+/// loop as the iteration's back edge, nothing at all; the second dropped
+/// the empty way, `*( A B )` for a rule that also takes `A` alone.
+/// Neither is a loop, and each renders as debug's main emits it.
+#[test]
+fn abnf_does_not_read_a_loop_through_a_helper_of_another_shape_as_one() {
+    type Helper = fn(Tin) -> Vec<AltSpec>;
+    let helpers: [(&str, Helper, &str); 2] = [
+        (
+            "pushes the loop",
+            |_| {
+                vec![AltSpec {
+                    p: Some("_gen1_star_x".into()),
+                    ..Default::default()
+                }]
+            },
+            "top = r-gen1-star-x\nr-gen1-star-x = [ r-gen1-star-x / A r-gen1-star-x-alt0 ]\nr-gen1-star-x-alt0 = r-gen1-star-x r-gen1-star-x-alt0-step1\nr-gen1-star-x-alt0-step1 = r-gen1-star-x\n\nA = %s\"a\"",
+        ),
+        (
+            "an empty way beside a consuming one",
+            |b| {
+                vec![
+                    AltSpec::new(),
+                    AltSpec {
+                        s: vec![vec![b]],
+                        ..Default::default()
+                    },
+                ]
+            },
+            "top = r-gen1-star-x\nr-gen1-star-x = [ r-gen1-star-x / A r-gen1-star-x-alt0 ]\nr-gen1-star-x-alt0 = [ B ] r-gen1-star-x-alt0-step1\nr-gen1-star-x-alt0-step1 = r-gen1-star-x\n\nA = %s\"a\"\nB = %s\"b\"",
+        ),
+    ];
+    for (what, opens, want) in helpers {
+        let mut parser = Tabnas::new();
+        let a = parser.token_with_source("#A", "a");
+        let b = parser.token_with_source("#B", "b");
+        let end = token(&parser, "#ZZ");
+        simple_rule(
+            &mut parser,
+            "top",
+            AltSpec {
+                p: Some("_gen1_star_x".into()),
+                ..Default::default()
+            },
+            Some(AltSpec::new()),
+        );
+        parser.define_rule("_gen1_star_x", move |spec| {
+            spec.clear();
+            spec.add_open(loop_entry("_gen1_star_x"));
+            spec.add_open(AltSpec {
+                s: vec![vec![a]],
+                r: Some("_gen1_star_x$alt0".into()),
+                ..Default::default()
+            });
+            loop_exits(spec, end);
+        });
+        parser.define_rule("_gen1_star_x$alt0", move |spec| {
+            spec.clear();
+            for alt in opens(b) {
+                spec.add_open(alt);
+            }
+            spec.add_close(AltSpec {
+                r: Some("_gen1_star_x$alt0$step1".into()),
+                ..Default::default()
+            });
+        });
+        simple_rule(
+            &mut parser,
+            "_gen1_star_x$alt0$step1",
+            AltSpec {
+                r: Some("_gen1_star_x".into()),
+                ..Default::default()
+            },
+            None,
+        );
+        wrap_start(&mut parser, "top");
+        assert_eq!(abnf(&parser), want, "{what}");
+    }
 }
 
 /// A user loop over `*A` whose close phase takes a `B` and replaces the
