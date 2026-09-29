@@ -1376,6 +1376,8 @@ fn rule_of_opens(opens: Opens) -> String {
 ///   compiler never guards an exit;
 /// - the only exit is a FOLLOW peek, with no empty exit, so the rule
 ///   stops only where that token comes next;
+/// - the entry carries a further condition, which may keep it from
+///   setting the counter the continue is guarded on;
 /// - a function decides the continue's route.
 ///
 /// Read as a loop on its entry alone, all but one rendered as `*A`, which
@@ -1398,7 +1400,7 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             ..Default::default()
         }
     }
-    let cases: [(&str, Opens, &str); 14] = [
+    let cases: [(&str, Opens, &str); 15] = [
         (
             "a continue that never comes back",
             |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
@@ -1528,6 +1530,30 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
                         b: 1,
                         ..Default::default()
                     },
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an entry under a further condition, before a continue guarded on the counter it sets",
+            |a, _| {
+                let mut entry = loop_entry("once");
+                entry.c.push(Condition {
+                    path: vec!["n".into(), "never".into()],
+                    op: CompareOp::Eq,
+                    value: Value::Number(1.0),
+                });
+                vec![
+                    entry,
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "rep".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(1.0),
+                        }],
+                        ..back(a)
+                    },
+                    AltSpec::new(),
                 ]
             },
             "once = [ once / A once ]\n\nA = %s\"a\"",
@@ -1711,6 +1737,77 @@ fn abnf_keeps_a_plus_helper_that_repeats_by_its_own_cycle() {
 /// star to them, suppressed its production and inlined it without its
 /// epsilon branch and back edge: `*( B A C )`, exactly one `A` where the
 /// original takes any number.
+/// A grammar whose start rule is a synthetic loop, named directly or
+/// through the `__start__` wrapper. A synthetic loop is rendered where
+/// it is referenced, and nothing references the start: it came out with
+/// no production at all. The start is always a production.
+#[test]
+fn abnf_keeps_a_synthetic_loop_that_is_the_start_as_a_production() {
+    for wrapped in [false, true] {
+        let mut parser = Tabnas::new();
+        let a = parser.token_with_source("#A", "a");
+        let end = token(&parser, "#ZZ");
+        terminal_loop(&mut parser, "_gen1_star_A", a, end);
+        if wrapped {
+            wrap_start(&mut parser, "_gen1_star_A");
+        } else {
+            parser.options.rule.start = "_gen1_star_A".into();
+        }
+        assert_eq!(
+            abnf(&parser),
+            "r-gen1-star-A = *A\n\nA = %s\"a\"",
+            "wrapped: {wrapped}"
+        );
+    }
+}
+
+/// A synthetic rule with the loop's whole open scaffold whose close
+/// replaces with a synthetic helper, and that helper's route a function
+/// decides: it may come back to the rule by a way the spec does not
+/// show. The rule is no loop, and renders as debug's main emits it.
+#[test]
+fn abnf_does_not_read_a_synthetic_loop_whose_close_helper_is_dynamic_as_one() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen2_group", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![b]],
+            r_fn: Some(std::sync::Arc::new(|_, _| None)),
+            ..Default::default()
+        });
+    });
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry("_gen1_star_A"));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            r: Some("_gen2_group".into()),
+            ..Default::default()
+        });
+    });
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen1-star-A\nr-gen1-star-A = [ r-gen1-star-A / A r-gen1-star-A ] B\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
 /// A loop whose iteration pushes `_gen2_group$alt0`, a synthetic rule
 /// that repeats by a cycle of its own, `A _gen2_group$alt0 / B`, and
 /// comes back to the loop. The cycle is no iteration of the loop's:

@@ -442,8 +442,8 @@ only until the other two catch up. What the Rust emitter does:
    loop**, decided by shape rather than by name: the entry first,
    continues that each come back to the rule having consumed or pushed
    on the way, and the empty exit `{ }`, with no condition. The guard is part of the entry's shape: the entry consumes nothing, pushes nothing,
-   replaces the rule with itself, carries the guard `n.rep == 0`, and
-   sets that counter to 1. A user rule's own non-consuming self-replace,
+   replaces the rule with itself, carries the guard `n.rep == 0` and no
+   other condition, and sets that counter to 1. A user rule's own non-consuming self-replace,
    a guarded or counted state transition without that guard, is not a
    loop and renders as a reference to the rule, as it always did. Nor
    is a rule with the entry and not the rest: a continue that never
@@ -501,9 +501,12 @@ only until the other two catch up. What the Rust emitter does:
    A synthetic loop renders inline, wherever a rule refers to it, with
    no name of its own to render there, so a synthetic rule whose closes
    may run it again is no loop and keeps its production: a close that
-   reaches it again, one whose route a function decides, and a close
-   push, which comes back to the close phase when the pushed rule ends
-   and runs the closes again. The compiler's loops have no closes.
+   reaches it again, one whose route a function decides or that reaches
+   a helper whose route a function decides, and a close push, which
+   comes back to the close phase when the pushed rule ends and runs the
+   closes again. The compiler's loops have no closes. The start rule is
+   always a production, a synthetic loop included, since no rule
+   encloses it to render it inline.
 4. **A synthesised helper's kind is read from its own name segment**,
    the word after `_gen<n>_` in the part before any `$`, never from a
    name it embeds. A repetition's helper is named after its item: a star
@@ -539,9 +542,11 @@ for the entry, `{ s: A }` and `{ }`, as do a rule item's loop whose
 step never comes back and one whose step comes back only under a
 condition, a rule with a second entry after its continue, one whose
 only exit carries a condition and one whose only exit is a FOLLOW
-peek. A user loop whose close re-enters it renders `once = *A [ B once
-]`, and a synthetic rule of that shape, or one whose close pushes, keeps
-its production. Four more pin the bound: a
+peek, and one whose entry carries a further condition. A user loop
+whose close re-enters it renders `once = *A [ B once ]`, and a
+synthetic rule of that shape, one whose close pushes, and one whose
+close reaches a helper a function routes keep their productions. A
+synthetic loop as the start rule renders `r-gen1-star-A = *A`. Four more pin the bound: a
 group with a `$alt` chain of its own inside a loop renders as
 `top = *( *A B / C ) D`, the plus over it as
 `top = 1*( *A B / C ) D`, a plus whose item holds an old

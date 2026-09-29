@@ -304,7 +304,8 @@ impl<'a> Emitter<'a> {
     /// A close alternative of `rule` may run `rule` again: it pushes,
     /// which comes back to the close phase when the pushed rule ends and
     /// runs the closes again; its route is a function's to decide; or it
-    /// reaches `rule` again, directly or through synthetic helpers. A
+    /// reaches `rule` again, directly or through synthetic helpers, or
+    /// through a helper whose route a function decides. A
     /// user loop renders a re-entry as a reference to its own production
     /// (`H = *A [ B H ]`), but a synthetic loop is inlined wherever it is
     /// referenced and has no name to refer back to, so a synthetic rule
@@ -332,6 +333,11 @@ impl<'a> Emitter<'a> {
                 continue;
             }
             if let Some(spec) = self.rules.get(name) {
+                // A helper whose route a function decides may come back
+                // to `rule` by a way the spec does not show.
+                if spec.open.iter().chain(spec.close.iter()).any(is_dynamic) {
+                    return true;
+                }
                 pending.extend(
                     spec.open
                         .iter()
@@ -681,10 +687,10 @@ impl<'a> Emitter<'a> {
     }
 
     /// A rule rendered where it is referenced and never as a production
-    /// of its own: a foldable synthetic, a synthetic loop, or a loop's
-    /// iteration helper. A loop that is a USER rule keeps its production
-    /// (its body is the repetition) and is referenced by name, so a
-    /// grammar whose start rule is a loop still has a start production.
+    /// of its own, unless it is the start rule: a foldable synthetic, a
+    /// synthetic loop, or a loop's iteration helper. A loop that is a
+    /// USER rule keeps its production (its body is the repetition) and is
+    /// referenced by name.
     fn is_folded(&self, name: &str) -> bool {
         self.is_foldable(name)
             || (self.loops.contains(name) && self.is_synthetic(name))
@@ -704,11 +710,13 @@ impl<'a> Emitter<'a> {
             .cloned()
             .collect();
 
+        // The start rule is always a production, folded or not: nothing
+        // encloses it to render it where it is referenced, and a grammar
+        // whose start is a synthetic loop (a standalone `*A`) otherwise
+        // came out with no production at all.
         let mut ordered: Vec<String> = Vec::new();
         let mut seen_rules: BTreeSet<String> = BTreeSet::new();
-        if let Some(start) =
-            start_rule.filter(|start| self.rules.contains_key(start) && !self.is_folded(start))
-        {
+        if let Some(start) = start_rule.filter(|start| self.rules.contains_key(start)) {
             seen_rules.insert(start.clone());
             ordered.push(start);
         }
@@ -1254,8 +1262,11 @@ fn is_plain_way(alt: &AltSpec) -> bool {
 
 /// A repeat loop's entry, the whole of the compiler's shape: the
 /// alternative consumes nothing, pushes nothing, replaces `rule` with
-/// itself, is guarded by `n.rep == 0` and sets that counter to 1 —
-/// allocating the node and counting the iteration on the way in. It is
+/// itself, is guarded by `n.rep == 0` and by nothing else, and sets that
+/// counter to 1 — allocating the node and counting the iteration on the
+/// way in. A further condition, in `c` or any other channel, may keep
+/// the entry from running, and with it the counter it sets, which the
+/// continues may be guarded on. It is
 /// what marks a rule as a loop. `s`, `b`, `p` and `r` alone are not
 /// enough: a user rule's own non-consuming self-replace, a guarded or
 /// counted state transition, has the same four and is no repetition, and
@@ -1266,7 +1277,12 @@ fn is_loop_entry(alt: &AltSpec, rule: &str) -> bool {
         && alt.p.is_none()
         && alt.r.as_deref() == Some(rule)
         && alt.n.get("rep") == Some(&1)
-        && alt.c.iter().any(is_rep_guard)
+        && matches!(alt.c.as_slice(), [guard] if is_rep_guard(guard))
+        && alt.c_ref.is_none()
+        && alt.c_fn.is_none()
+        && alt.c_match.is_none()
+        && alt.c_lex.is_none()
+        && alt.c_lex_match.is_none()
 }
 
 /// The entry's guard, `n.rep == 0`: the counter the entry sets is still
