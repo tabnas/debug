@@ -1384,6 +1384,8 @@ fn rule_of_opens(opens: Opens) -> String {
 ///   left behind, and a continue may carry no guard but the compiler's
 ///   suffix-debt counter;
 /// - a FOLLOW peek before the only continue covers it, so it never runs;
+/// - a peek covers one continue, whose item no live continue takes, so
+///   rendering it would offer an alternative the rule never takes;
 /// - a continue consumes an empty token slot, which takes any token and
 ///   renders as nothing;
 /// - the entry sets a further counter, which turns off a continue
@@ -1410,7 +1412,7 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             ..Default::default()
         }
     }
-    let cases: [(&str, Opens, &str); 20] = [
+    let cases: [(&str, Opens, &str); 21] = [
         (
             "a continue that never comes back",
             |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
@@ -1643,6 +1645,23 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
                 ]
             },
             "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a dead continue with an item no live continue takes",
+            |a, b| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![a]],
+                        b: 1,
+                        ..Default::default()
+                    },
+                    back(a),
+                    back(b),
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once / B once ]\n\nA = %s\"a\"\nB = %s\"b\"",
         ),
         (
             "a continue that consumes an empty token slot",

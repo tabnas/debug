@@ -275,6 +275,7 @@ impl<'a> Emitter<'a> {
         }
         let (mut continues, mut exit, mut shadowed) = (false, false, false);
         let dead = shadowed_by_peeks(&spec.open, rule);
+        let (mut live_items, mut dead_items) = (Vec::new(), Vec::new());
         for (index, alt) in rest.iter().enumerate() {
             // The compiler writes one entry; a second can never be taken
             // (the first set its counter) and is neither continue nor exit.
@@ -298,15 +299,38 @@ impl<'a> Emitter<'a> {
                 }
             } else if !shadowed && self.continues_loop(alt, rule) {
                 // A continue a FOLLOW peek before it covers never runs, and
-                // does not make the rule a loop, though it still renders:
-                // it is the source's own alternative, as `*( "a" / "b" )`
-                // with `b` in FOLLOW keeps its `B`.
-                continues |= !dead[index + 1];
+                // does not make the rule a loop. It still renders, as every
+                // continue does, so its item must be one a live continue
+                // takes too, as the compiler's dead continues' are (the
+                // same iteration helper, or the same token with less
+                // lookahead); one with an item of its own would render as
+                // an alternative the rule never takes.
+                let item = self.continue_item(alt, rule);
+                if dead[index + 1] {
+                    dead_items.push(item);
+                } else {
+                    continues = true;
+                    live_items.push(item);
+                }
             } else {
                 return false;
             }
         }
-        continues && exit && (!self.is_synthetic(rule) || spec.close.iter().all(is_idle))
+        continues
+            && exit
+            && dead_items.iter().all(|item| live_items.contains(item))
+            && (!self.is_synthetic(rule) || spec.close.iter().all(is_idle))
+    }
+
+    /// The item a continue of the loop `rule` takes, one of the two shapes
+    /// [`Emitter::continues_loop`] accepts: the token a terminal continue
+    /// consumes, or the rule the iteration helper pushes.
+    fn continue_item(&self, alt: &AltSpec, rule: &str) -> Option<Item> {
+        if alt.r.as_deref() == Some(rule) {
+            return alt.s.first().cloned().map(Item::Token);
+        }
+        let helper = self.rules.get(alt.r.as_deref()?)?;
+        helper.open.first()?.p.clone().map(Item::Rule)
     }
 
     /// A continue in one of the compiler's two shapes, coming back to its

@@ -469,8 +469,9 @@ only until the other two catch up. What the Rust emitter does:
      helper of any other shape makes the rule no loop. A continue that
      a FOLLOW peek before it covers never runs: the compiler writes
      such dead continues where a token can both start the item and
-     follow the loop, and they render as the source's alternatives,
-     but a rule is a loop only when some continue is live.
+     follow the loop, always with an item a live continue takes too,
+     and they render with it. A rule is a loop only when some continue
+     is live and every dead one's item is a live one's.
    - **The empty exit `{ }`, with no condition**, and no continue after
      it, since it takes whatever comes. FOLLOW peeks may stand among
      the exits, before the continues too: the compiler puts one there
@@ -573,7 +574,7 @@ each rendering as it always did:
 - a close in the entry's whole shape on a rule without the scaffold,
   `odd = A [ odd ]`
 - a rule with the entry and not the rest of the scaffold, `once = [
-  once / A ]` for the entry, `{ s: A }` and `{ }`, and nineteen more,
+  once / A ]` for the entry, `{ s: A }` and `{ }`, and twenty more,
   one for each way the scaffold can fail
 - a rule item's loop whose step never comes back, one whose step comes
   back only under a condition, one whose helper pushes the loop itself
