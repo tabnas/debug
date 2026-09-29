@@ -305,7 +305,8 @@ impl<'a> Emitter<'a> {
     /// which comes back to the close phase when the pushed rule ends and
     /// runs the closes again; its route is a function's to decide; or it
     /// reaches `rule` again, directly or through synthetic helpers, or
-    /// through a helper whose route a function decides. A
+    /// through a helper whose route a function decides or whose close
+    /// pushes. A
     /// user loop renders a re-entry as a reference to its own production
     /// (`H = *A [ B H ]`), but a synthetic loop is inlined wherever it is
     /// referenced and has no name to refer back to, so a synthetic rule
@@ -334,8 +335,11 @@ impl<'a> Emitter<'a> {
             }
             if let Some(spec) = self.rules.get(name) {
                 // A helper whose route a function decides may come back
-                // to `rule` by a way the spec does not show.
-                if spec.open.iter().chain(spec.close.iter()).any(is_dynamic) {
+                // to `rule` by a way the spec does not show, and one whose
+                // close pushes runs its closes again, over and over.
+                if spec.open.iter().chain(spec.close.iter()).any(is_dynamic)
+                    || spec.close.iter().any(|alt| alt.p.is_some())
+                {
                     return true;
                 }
                 pending.extend(
@@ -365,7 +369,7 @@ impl<'a> Emitter<'a> {
         rule: &str,
         known: &mut BTreeMap<String, Back>,
     ) -> bool {
-        if alt.p.is_some() {
+        if alt.p.is_some() || !is_guarded_as_compiled(alt) {
             return false;
         }
         let consumed = alt.s.len() > alt.b;
@@ -683,7 +687,11 @@ impl<'a> Emitter<'a> {
             let next = targets(&target);
             stack.push((target, next));
         }
+        let plus = own_segment(name);
         reached_loop
+            && self
+                .loop_after(plus)
+                .is_some_and(|tail| self.counted_by_construction(plus, &tail).is_some())
     }
 
     /// A rule rendered where it is referenced and never as a production
@@ -1023,7 +1031,7 @@ impl<'a> Emitter<'a> {
         }
         let body = self.rule_seq(name, &inner);
         if is_helper(name, "plus") || is_helper(name, "rep") {
-            if let Some(counted) = self.counted_repetition(name, &body, &inner) {
+            if let Some(counted) = self.counted_repetition(name, &inner) {
                 return counted;
             }
         }
@@ -1051,36 +1059,108 @@ impl<'a> Emitter<'a> {
     /// other body renders as it is: a bounded `2*4A` compiles to nested
     /// optionals and ends in no loop, and a hand-built rule that merely
     /// carries the name is whatever it says.
-    fn counted_repetition(
-        &mut self,
-        name: &str,
-        body: &str,
-        seen: &BTreeSet<String>,
-    ) -> Option<String> {
+    fn counted_repetition(&mut self, name: &str, seen: &BTreeSet<String>) -> Option<String> {
         let loop_name = self.loop_after(name)?;
+        let count = self.counted_by_construction(name, &loop_name)?;
         let mut inner = seen.clone();
         inner.insert(loop_name.clone());
         let repetition = self.repetition(&loop_name, &inner);
-        // The item as the repetition wrote it: `A`, `[ A ]`, `( A / B )`,
-        // and for `*( a b )` the bare sequence `a b` the group inlined to.
-        let one = repetition.strip_prefix('*')?;
-        let mut items = vec![one];
-        if let Some(inside) = one.strip_prefix("( ").and_then(|s| s.strip_suffix(" )")) {
-            items.push(inside);
-        }
-        for item in items {
-            let prefix = format!("{item} ");
-            let mut count = 0usize;
-            let mut rest = body;
-            while let Some(next) = rest.strip_prefix(&prefix) {
+        repetition
+            .starts_with('*')
+            .then(|| format!("{count}{repetition}"))
+    }
+
+    /// How many times the chain of the `_plus` / `_rep` helper `name`
+    /// takes the item of the loop `tail` it ends in, when it is the
+    /// compiler's construction and nothing else: each rule of the chain
+    /// has one plain open alternative, consuming the loop's item token
+    /// (`{ s: [A], p: tail }` for `1*"a"`, `{ s: [A A], … }` for `2*"a"`)
+    /// or pushing the loop's item rule (`{ p: item }`, then a close
+    /// replace to the next step), and the last pushes `tail` and ends.
+    /// A chain that takes anything else, or a different rule that
+    /// merely renders the same, is no counted repetition: `X *X` and
+    /// `1*X` compile to different recognisers, and only the compiler's
+    /// own construction is the `1*X` it was compiled from.
+    fn counted_by_construction(&self, name: &str, tail: &str) -> Option<usize> {
+        let item = self.loop_item(tail)?;
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        let mut current = name;
+        let mut count = 0usize;
+        loop {
+            if !visited.insert(current) {
+                return None;
+            }
+            let spec = self.rules.get(current)?;
+            let [open] = spec.open.as_slice() else {
+                return None;
+            };
+            if !is_plain_way(open) || open.b != 0 || open.r.is_some() {
+                return None;
+            }
+            for slot in &open.s {
+                if item != Item::Token(slot.clone()) {
+                    return None;
+                }
                 count += 1;
-                rest = next;
             }
-            if 0 < count && rest == repetition {
-                return Some(format!("{count}{repetition}"));
+            match open.p.as_deref() {
+                Some(target) if target == tail => {
+                    let ends = spec.close.iter().all(|alt| {
+                        is_plain_way(alt) && alt.s.is_empty() && alt.p.is_none() && alt.r.is_none()
+                    });
+                    return (ends && 0 < count).then_some(count);
+                }
+                Some(target) if item == Item::Rule(target.to_owned()) => count += 1,
+                Some(_) => return None,
+                None => {}
+            }
+            let [close] = spec.close.as_slice() else {
+                return None;
+            };
+            if !is_plain_way(close) || !close.s.is_empty() || close.p.is_some() {
+                return None;
+            }
+            current = close.r.as_deref()?;
+        }
+    }
+
+    /// The one item the loop `rule` repeats, as the compiler builds it:
+    /// a token its one terminal continue consumes (`{ s: [A], r: rule }`),
+    /// or the rule its iteration helper pushes, after a continue that
+    /// peeks one of that rule's FIRST tokens (`{ s: [A], b: 1, r:
+    /// rule$alt0 }`, `rule$alt0` opening `{ p: item }`). None for a loop
+    /// over anything else.
+    fn loop_item(&self, rule: &str) -> Option<Item> {
+        let spec = self.rules.get(rule)?;
+        let mut item: Option<Item> = None;
+        for alt in spec.open.iter().skip(1) {
+            if !has_content(alt, rule, true) {
+                continue;
+            }
+            let this = if alt.r.as_deref() == Some(rule) && alt.b == 0 {
+                let [slot] = alt.s.as_slice() else {
+                    return None;
+                };
+                Item::Token(slot.clone())
+            } else if alt.s.len() == alt.b {
+                let helper = self.rules.get(alt.r.as_deref()?)?;
+                let [open] = helper.open.as_slice() else {
+                    return None;
+                };
+                if !open.s.is_empty() || open.r.is_some() || !is_plain_way(open) {
+                    return None;
+                }
+                Item::Rule(open.p.clone()?)
+            } else {
+                return None;
+            };
+            match &item {
+                None => item = Some(this),
+                Some(seen) if *seen == this => {}
+                Some(_) => return None,
             }
         }
-        None
+        item
     }
 
     /// The loop a `_plus` / `_rep` helper ends in: the open target of the
@@ -1202,6 +1282,14 @@ fn has_content(alt: &AltSpec, rule: &str, rule_is_loop: bool) -> bool {
         && (alt.s.len() > alt.b || alt.p.is_some() || alt.r.is_some())
 }
 
+/// The one item a loop repeats ([`Emitter::loop_item`]): a token slot its
+/// continue consumes, or the rule its iteration helper pushes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Item {
+    Token(Vec<Tin>),
+    Rule(String),
+}
+
 /// How a helper on a loop's way back reaches the loop (see
 /// [`Emitter::back_through`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1247,6 +1335,30 @@ fn is_dynamic(alt: &AltSpec) -> bool {
         || alt.h_match.is_some()
 }
 
+/// A continue guarded as the compiler guards one: by nothing, or by the
+/// suffix-debt counter alone (`n.debt_… == 0`, which tabnas-bnf puts on
+/// a left-recursion tail loop's contested branches). Any other
+/// condition may contradict the state the entry leaves (`n.rep == 0`
+/// after the entry has set it to 1) and keep the continue from ever
+/// running, so a rule with one is no loop.
+fn is_guarded_as_compiled(alt: &AltSpec) -> bool {
+    !is_dynamic(alt)
+        && matches!(alt.c.as_slice(), [] | [_])
+        && alt.c.iter().all(is_debt_guard)
+        && alt.c_ref.is_none()
+        && alt.c_fn.is_none()
+        && alt.c_match.is_none()
+        && alt.c_lex.is_none()
+        && alt.c_lex_match.is_none()
+}
+
+/// The suffix-debt guard, `n.debt_… == 0`.
+fn is_debt_guard(condition: &Condition) -> bool {
+    matches!(condition.path.as_slice(), [bag, counter] if bag == "n" && counter.starts_with("debt_"))
+        && condition.op == CompareOp::Eq
+        && matches!(condition.value, Value::Number(count) if count == 0.0)
+}
+
 /// An alternative a loop's helper can come back through: read from the
 /// spec alone, and taken whatever the rule's state, with no condition of
 /// any kind.
@@ -1261,7 +1373,9 @@ fn is_plain_way(alt: &AltSpec) -> bool {
 }
 
 /// A repeat loop's entry, the whole of the compiler's shape: the
-/// alternative consumes nothing, pushes nothing, replaces `rule` with
+/// alternative matches no token, not even a peeked one (which would
+/// leave the counter unset wherever that token is not next), pushes
+/// nothing, replaces `rule` with
 /// itself, is guarded by `n.rep == 0` and by nothing else, and sets that
 /// counter to 1 — allocating the node and counting the iteration on the
 /// way in. A further condition, in `c` or any other channel, may keep
@@ -1273,7 +1387,8 @@ fn is_plain_way(alt: &AltSpec) -> bool {
 /// reading it as one rewrote the whole rule as `*…`, accepting empty and
 /// repeated inputs the original need not.
 fn is_loop_entry(alt: &AltSpec, rule: &str) -> bool {
-    alt.s.len() <= alt.b
+    alt.s.is_empty()
+        && alt.b == 0
         && alt.p.is_none()
         && alt.r.as_deref() == Some(rule)
         && alt.n.get("rep") == Some(&1)
@@ -1640,16 +1755,19 @@ mod tests {
         // `{ s: A, b: 1, r: H }`: the `[ H ]` of `H = A [ H ]`.
         assert!(in_loop(&alt(&[7], 1, None, Some("H"))));
         // And the entry's own shape, guard and counter included, when the
-        // rule being rendered is NOT a loop: it has no entry to skip, and
-        // the close `{ c: [n.rep == 0], n: {rep: 1}, s: A, b: 1, r: odd }`
-        // is the `[ odd ]` of `odd = A [ odd ]`.
+        // rule being rendered is NOT a loop: it has no entry to skip.
+        assert!(has_content(&entry("odd"), "odd", false));
+        assert!(!has_content(&entry("odd"), "odd", true));
+        // With a peek it is no entry at all, whatever the rule: the close
+        // `{ c: [n.rep == 0], n: {rep: 1}, s: A, b: 1, r: odd }` is the
+        // `[ odd ]` of `odd = A [ odd ]`.
         let guarded_close = AltSpec {
             s: vec![vec![7]],
             b: 1,
             ..entry("odd")
         };
         assert!(has_content(&guarded_close, "odd", false));
-        assert!(!has_content(&guarded_close, "odd", true));
+        assert!(has_content(&guarded_close, "odd", true));
     }
 
     #[test]
@@ -1672,13 +1790,14 @@ mod tests {
             ..entry("H")
         };
         assert!(!is_loop_entry(&terminal, "H"));
-        // A peek that is given back still consumes nothing.
+        // A peek, even one given back, is not the entry either: it sets
+        // the counter only where that token comes next.
         let peek = AltSpec {
             s: vec![vec![7]],
             b: 1,
             ..entry("H")
         };
-        assert!(is_loop_entry(&peek, "H"));
+        assert!(!is_loop_entry(&peek, "H"));
         // Replacing with another rule, or pushing, is not the entry.
         let other = AltSpec {
             r: Some("H$alt0".into()),

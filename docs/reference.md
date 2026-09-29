@@ -438,75 +438,97 @@ only until the other two catch up. What the Rust emitter does:
    a loop has an entry to skip: a rule that is not one (its open
    alternatives hold no entry) keeps every alternative, a close in the
    entry's shape included, so `odd = A [ odd ]` renders as it always did.
-3. **A rule whose open alternatives are the loop's whole scaffold is a
-   loop**, decided by shape rather than by name: the entry first,
-   continues that each come back to the rule having consumed or pushed
-   on the way, and the empty exit `{ }`, with no condition. The guard is part of the entry's shape: the entry consumes nothing, pushes nothing,
-   replaces the rule with itself, carries the guard `n.rep == 0` and no
-   other condition, and sets that counter to 1. A user rule's own non-consuming self-replace,
-   a guarded or counted state transition without that guard, is not a
-   loop and renders as a reference to the rule, as it always did. Nor
-   is a rule with the entry and not the rest: a continue that never
-   comes back (with the entry, `{ s: A }` and `{ }` take one `A` or
-   nothing), one continue of several that does not, one that comes back
-   having taken nothing, no exit, an empty exit before a continue,
-   which it shadows whenever its condition, if it has one, holds, the
-   entry anywhere but first, a second entry, which is neither a
-   continue nor an exit (the first has set the counter, so its guard
-   never holds), an exit under a condition, which may never hold, or
-   a FOLLOW peek with no empty exit, which stops the rule only where
-   that token comes next. The compiler never guards an exit. A FOLLOW peek before the continues shadows only what it peeks: the
-   compiler puts one there where a keyword must end the loop rather
-   than be taken as an item (`*word "end"` with `word = 1*ALPHA`). A continue comes back
-   when it replaces with the rule, or with a synthetic helper every way
-   through which replaces onward to it (`H$alt0`, whose close replaces
-   with `H$alt0$step1`, which replaces with `H`). A push is no back
-   edge, even with an `r` beside it, which the engine does not follow.
-   A way back is read only where the spec decides it: an alternative
-   whose route or backtrack a function decides, the entry included,
-   makes the rule no loop,
-   and a helper's way back must carry no condition, as the compiler's
-   never do. The helpers of a loop `H` are the synthetic
-   rules its iteration reaches short of a kept production, bounded by
-   those productions and not by name: `H$alt0` and `H$alt0$step1`, the
+3. **A rule whose open alternatives are the loop's whole scaffold,
+   exactly as the compiler writes it, is a loop**, decided by shape
+   rather than by name. Anything else renders as it did before. The
+   scaffold, in order:
+
+   - **The entry comes first, and only once.** It matches no token, not even a
+     peeked one, pushes nothing, replaces the rule with itself, carries
+     the guard `n.rep == 0` and no other condition, and sets that
+     counter to 1. A user rule's own non-consuming self-replace, a
+     guarded or counted state transition without that guard, is no
+     loop and renders as a reference to the rule, as it always did. A
+     second entry is neither a continue nor an exit: the first has set
+     the counter, so its guard never holds.
+   - **At least one continue**, each coming back to the rule having
+     consumed or pushed on the way: directly (`{ s: A, r: H }`), or
+     through a synthetic helper every way through which replaces
+     onward to it (`H$alt0`, whose close replaces with `H$alt0$step1`,
+     which replaces with `H`). A push is no back edge, even with an
+     `r` beside it, which the engine does not follow. A continue
+     carries no guard but the compiler's suffix-debt counter
+     (`n.debt_… == 0`), since any other may contradict the state the
+     entry leaves, as `n.rep == 0` does, and a helper's way back
+     carries no condition at all.
+   - **The empty exit `{ }`, with no condition**, and no continue after
+     it, since it takes whatever comes. FOLLOW peeks may stand among
+     the exits, before the continues too: the compiler puts one there
+     where a keyword must end the loop rather than be taken as an item
+     (`*word "end"` with `word = 1*ALPHA`). A peek shadows only what it
+     peeks and stops the rule only where its token comes next, so no
+     peek stands in for the empty exit. The compiler never guards an
+     exit.
+   - **Nothing a function decides.** An alternative whose route or
+     backtrack a function decides, the entry's included, makes the
+     rule no loop.
+
+   So a rule with the entry and not the rest is no loop: a continue
+   that never comes back (with the entry, `{ s: A }` and `{ }` take one
+   `A` or nothing), one of several that never comes back, one that comes back
+   having taken nothing, no exit or only a guarded or peeking one, an
+   empty exit before a continue, the entry anywhere but first, a second
+   entry, or an entry that peeks or carries a further condition.
+
+   **Helpers.** The helpers of a loop `H` are the synthetic rules its
+   iteration reaches short of a kept production, bounded by those
+   productions and not by name: `H$alt0` and `H$alt0$step1`, the
    foldable group the iteration pushes, and the `$alt` / `$step` chain
    the compiler gives a group whose alternative starts with a rule
    (`( *A B / C )` has one). A kept production inside the iteration, a
    user rule, a nested loop, an old push-chain star or a synthetic rule
    that repeats by a cycle of its own, not through the loop, stays a
    reference by name with its own production, and nothing beyond it is
-   reached; a `_plus` is judged for itself. The loop is rendered wherever it is
-   referenced as a repetition of its iteration: `*A` and `*"a"` when the
-   iteration is one element, `*( a b )` otherwise, where the iteration
-   is the ` / `-joined rendering of the continue alternatives. A
-   terminal continue renders
-   the token it consumes; a ref continue renders `H$alt0`'s pushed item
-   (inlined when foldable) followed by its close continuation, and the
-   back edges (`r: H$alt0$step1`, then `r: H`) render nothing. `H`,
-   `H$alt0` and `H$alt0$step1` are never productions of their own. A
-   `_plus` helper over a loop folds too, when its own chain (the helper
-   and its `$step` helpers) reaches the loop and its walk meets no
-   cycle on the way. An old push-chain star inside the item is the
-   item's, a kept production referenced by name, and neither folds nor
-   stops the fold: only the plus's own trailing star in the old shape
-   keeps it a production. The folded helper is written back as the
-   `1*A` it was compiled from (a `_rep` helper as `2*A`): element by
-   element it is `A *A`, the same language, but the `abnf` crate compiles
-   `A *A` and `1*A` to different recognisers, and where `A` is nullable
-   the recompiled `A *A` rejects inputs the original accepts. A loop
-   that is a USER rule keeps its production, whose body is the
-   repetition followed by its close alternatives, as any rule's are. A
-   close that replaces with the rule re-enters it, which is no back edge
-   of the iteration, and renders as the rule's name: `H = *A [ B H ]`.
-   A synthetic loop renders inline, wherever a rule refers to it, with
-   no name of its own to render there, so a synthetic rule whose closes
-   may run it again is no loop and keeps its production: a close that
-   reaches it again, one whose route a function decides or that reaches
-   a helper whose route a function decides, and a close push, which
-   comes back to the close phase when the pushed rule ends and runs the
-   closes again. The compiler's loops have no closes. The start rule is
-   always a production, a synthetic loop included, since no rule
-   encloses it to render it inline.
+   reached. A `_plus` is judged for itself.
+
+   **Rendering.** The loop is rendered wherever it is referenced as a
+   repetition of its iteration: `*A` and `*"a"` when the iteration is
+   one element, `*( a b )` otherwise, where the iteration is the
+   ` / `-joined rendering of the continue alternatives. A terminal
+   continue renders the token it consumes; a ref continue renders
+   `H$alt0`'s pushed item (inlined when foldable) followed by its close
+   continuation, and the back edges (`r: H$alt0$step1`, then `r: H`)
+   render nothing. `H`, `H$alt0` and `H$alt0$step1` are never
+   productions of their own.
+
+   **Counted repetitions.** A `_plus` helper over a loop folds too when
+   it is the compiler's construction: its chain (the helper and its
+   `$step` helpers) consumes or pushes exactly the loop's own item, the
+   token its continue consumes or the rule its iteration helper pushes,
+   then pushes the loop, and its walk meets no cycle. Such a helper is
+   written back as the `1*A` it was compiled from (a `_rep` helper as `2*A`):
+   element by element it is `A *A`, the same language, but the `abnf`
+   crate compiles `A *A` and `1*A` to different recognisers, and where
+   `A` is nullable the recompiled `A *A` rejects inputs the original
+   accepts. A chain over an item that merely renders the same, or ending
+   in an old push-chain star, keeps its production. An old push-chain
+   star inside the item is the item's, referenced by name, and never
+   stops the fold.
+
+   **Closes and the start.** A loop that is a USER rule keeps its
+   production, whose body is the repetition followed by its close
+   alternatives, as any rule's are. A close that replaces with the rule
+   re-enters it, which is no back edge of the iteration, and renders as
+   the rule's name: `H = *A [ B H ]`. A synthetic loop renders inline,
+   wherever a rule refers to it, with no name of its own to render
+   there, so a synthetic rule whose closes may run it again is no loop
+   and keeps its production: a close that reaches it again, one whose
+   route a function decides, a close push, which comes back to the
+   close phase when the pushed rule ends and runs the closes again, and
+   a close that reaches a helper whose route a function decides or
+   whose own close pushes. The compiler's loops have no closes. The
+   start rule is always a production, a synthetic loop included, since
+   no rule encloses it to render it inline.
 4. **A synthesised helper's kind is read from its own name segment**,
    the word after `_gen<n>_` in the part before any `$`, never from a
    name it embeds. A repetition's helper is named after its item: a star
@@ -531,28 +553,36 @@ The shapes are pinned by `rs/tests/abnf_test.rs` (`rep = *"a"`,
 `top = 1*( "a" "b" )`, `top = 1*( "a" / "b" )`, hand-built from
 the compiler's output because the emitter must never gain an ABNF
 dependency, even in a test), which check the emitted text is RFC 5234
-(no dangling `/`, legal rule names). More pin what the shape excludes:
-a user rule's unguarded self-replace stays `st = st / A / B`, a
-guarded close continuation stays `one = A [ one ]`, a close in the
-entry's whole shape on a rule that is no loop stays `odd = A [ odd ]`,
-an old push-chain star inside a loop's group stays a kept production,
-`top = *( B r-gen1-star-A C )`, and a rule with the entry and not the
-rest of the scaffold renders as it always did, `once = [ once / A ]`
-for the entry, `{ s: A }` and `{ }`, as do a rule item's loop whose
-step never comes back and one whose step comes back only under a
-condition, a rule with a second entry after its continue, one whose
-only exit carries a condition and one whose only exit is a FOLLOW
-peek, and one whose entry carries a further condition. A user loop
-whose close re-enters it renders `once = *A [ B once ]`, and a
-synthetic rule of that shape, one whose close pushes, and one whose
-close reaches a helper a function routes keep their productions. A
-synthetic loop as the start rule renders `r-gen1-star-A = *A`. Four more pin the bound: a
-group with a `$alt` chain of its own inside a loop renders as
-`top = *( *A B / C ) D`, the plus over it as
-`top = 1*( *A B / C ) D`, a plus whose item holds an old
-push-chain star as `top = 1*( B r-gen1-star-A C )`, and a loop over a
-helper that repeats by its own cycle as `top = *r-gen2-group-alt0`
-with `r-gen2-group-alt0 = A r-gen2-group-alt0 / B`. No shared `test/spec` fixture pins
+(no dangling `/`, legal rule names). More pin what the shape excludes,
+each rendering as it always did:
+
+- a user rule's unguarded self-replace, `st = st / A / B`
+- a guarded close continuation, `one = A [ one ]`
+- a close in the entry's whole shape on a rule without the scaffold,
+  `odd = A [ odd ]`
+- a rule with the entry and not the rest of the scaffold, `once = [
+  once / A ]` for the entry, `{ s: A }` and `{ }`, and sixteen more,
+  one for each way the scaffold can fail
+- a rule item's loop whose step never comes back, and one whose step
+  comes back only under a condition
+- a synthetic rule whose close re-enters it, pushes, or reaches a
+  helper a function routes or whose close pushes
+
+And what it keeps:
+
+- an old push-chain star inside a loop's group stays a kept
+  production, `top = *( B r-gen1-star-A C )`
+- a user loop whose close re-enters it renders `once = *A [ B once ]`
+- a synthetic loop as the start rule renders `r-gen1-star-A = *A`
+- a plus over a different item that renders the same keeps its
+  production
+
+Four more pin the bound: a group with a `$alt` chain of its own inside
+a loop renders as `top = *( *A B / C ) D`, the plus over it as
+`top = 1*( *A B / C ) D`, a plus whose item holds an old push-chain
+star as `top = 1*( B r-gen1-star-A C )`, and a loop over a helper that
+repeats by its own cycle as `top = *r-gen2-group-alt0` with
+`r-gen2-group-alt0 = A r-gen2-group-alt0 / B`. No shared `test/spec` fixture pins
 them yet: all three runtimes run those, and two do not render the loop
 yet. When TypeScript and Go follow, the shapes move to `test/spec` and
 this section becomes history like the one above it.
