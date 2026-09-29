@@ -43,7 +43,7 @@
 //! as one of the rule's own alternatives and follow later. See
 //! `docs/reference.md`, "The repeat loop: the Rust port leads".
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::{IndexMap, IndexSet};
 use tabnas::{AltSpec, CompareOp, Condition, RuleSpec, Tabnas, Tin, Value};
@@ -195,10 +195,12 @@ struct Emitter<'a> {
     /// `bnf` wraps grammars in a synthetic `__start__` rule; when present
     /// it is skipped and the real start leads.
     synth_wrapper: Option<String>,
-    /// The repeat loops: every rule with a loop entry (see
-    /// [`is_loop_entry`]). Decided by shape, the whole of it, guard
-    /// included, so a hand-built loop and a compiled one read the same
-    /// and a user rule's own self-replace does not.
+    /// The repeat loops: every rule whose open alternatives are the
+    /// compiler's whole scaffold, the entry, the continues that come back
+    /// and an exit (see [`Emitter::is_loop`]). Decided by shape, so a
+    /// hand-built loop and a compiled one read the same, and neither a
+    /// user rule's own self-replace nor an entry without its back edge
+    /// does.
     loops: BTreeSet<String>,
     /// The synthetic rules a loop's iteration runs through (`H$alt0`,
     /// `H$alt0$step1`, and the `$alt` / `$step` chains of the groups it
@@ -217,23 +219,121 @@ impl<'a> Emitter<'a> {
             .collect();
         let synth_wrapper =
             ("__start__" == parser.options.rule.start).then(|| parser.options.rule.start.clone());
-        let loops: BTreeSet<String> = rules
-            .iter()
-            .filter(|(name, spec)| spec.open.iter().any(|alt| is_loop_entry(alt, name)))
-            .map(|(name, _)| name.clone())
-            .collect();
         let mut emitter = Self {
             namer: AbnfNamer::new(rules.keys().cloned()),
             rules,
             used: IndexMap::new(),
             end_tin: parser.options.token("#ZZ"),
             synth_wrapper,
-            loops,
+            loops: BTreeSet::new(),
             loop_helpers: BTreeSet::new(),
             parser,
         };
+        emitter.loops = emitter
+            .rules
+            .iter()
+            .filter(|(name, spec)| emitter.is_loop(name, spec))
+            .map(|(name, _)| name.clone())
+            .collect();
         emitter.loop_helpers = emitter.find_loop_helpers();
         emitter
+    }
+
+    /// `rule` is a repeat loop: its open alternatives are the compiler's
+    /// whole scaffold, not its entry alone. There is the entry
+    /// ([`is_loop_entry`]); at least one continue, an alternative that
+    /// consumes, pushes or replaces, and every continue comes back to
+    /// `rule` ([`Emitter::comes_back`]); and at least one exit, an
+    /// alternative that does none of those (the FOLLOW peek
+    /// `{ s: FOLLOW, b: 1 }` or `{ }`), since a repetition can stop. The
+    /// entry alone read a rule as a loop whose continue never came back:
+    /// the entry, `{ s: A }` and `{ }` take `A` at most once, and were
+    /// emitted as `*A`. A continue that does not come back ends the rule
+    /// after one item, so a rule with one is no repetition of it either.
+    fn is_loop(&self, rule: &str, spec: &RuleSpec) -> bool {
+        let (mut entry, mut continues, mut exit) = (false, false, false);
+        for alt in &spec.open {
+            if is_loop_entry(alt, rule) {
+                entry = true;
+            } else if !has_content(alt, rule, true) {
+                exit = true;
+            } else if self.comes_back(alt, rule) {
+                continues = true;
+            } else {
+                return false;
+            }
+        }
+        entry && continues && exit
+    }
+
+    /// A continue comes back to its loop `rule`: it replaces with `rule`
+    /// itself (`{ s: A, r: H }`, a terminal item), or with a synthetic
+    /// helper every way through which replaces onward until it reaches
+    /// `rule` ([`Emitter::helper_comes_back`]): `H$alt0`, which pushes
+    /// the item and on close replaces with `H$alt0$step1`, which replaces
+    /// with `H`. A push alone is no back edge: the child returns to the
+    /// continue's own rule, not to the loop.
+    fn comes_back(&self, alt: &AltSpec, rule: &str) -> bool {
+        let mut known = BTreeMap::new();
+        alt.r
+            .as_deref()
+            .is_some_and(|target| self.replaces_back(target, rule, &mut known))
+    }
+
+    /// `name` is `rule`, or a synthetic helper that comes back to it.
+    /// `known` holds each helper's answer, and `false` while it is being
+    /// decided, so a cycle of helpers that never reaches `rule` does not
+    /// come back and each helper is walked once.
+    fn replaces_back(&self, name: &str, rule: &str, known: &mut BTreeMap<String, bool>) -> bool {
+        if name == rule {
+            return true;
+        }
+        if let Some(answer) = known.get(name) {
+            return *answer;
+        }
+        if !self.is_synthetic(name) {
+            return false;
+        }
+        let Some(spec) = self.rules.get(name) else {
+            return false;
+        };
+        known.insert(name.to_owned(), false);
+        let answer = self.helper_comes_back(spec, rule, known);
+        known.insert(name.to_owned(), answer);
+        answer
+    }
+
+    /// Every way through a helper comes back to `rule`. An open
+    /// alternative that replaces hands on to its target, which must come
+    /// back; one that pushes, or does neither, goes on to the helper's
+    /// close, where every alternative must replace with a target that
+    /// comes back. An empty close, or a close alternative that replaces
+    /// with nothing, ends the helper there, short of the loop.
+    fn helper_comes_back(
+        &self,
+        spec: &RuleSpec,
+        rule: &str,
+        known: &mut BTreeMap<String, bool>,
+    ) -> bool {
+        let mut closes = None;
+        for alt in &spec.open {
+            let back = match alt.r.as_deref() {
+                Some(target) => self.replaces_back(target, rule, known),
+                None => *closes.get_or_insert_with(|| {
+                    !spec.close.is_empty()
+                        && spec.close.iter().all(|close| {
+                            close
+                                .r
+                                .as_deref()
+                                .is_some_and(|target| self.replaces_back(target, rule, known))
+                        })
+                }),
+            };
+            if !back {
+                return false;
+            }
+        }
+        !spec.open.is_empty()
     }
 
     /// The iteration helpers of every loop `H`: the synthetic rules

@@ -1329,6 +1329,132 @@ fn abnf_keeps_a_guarded_self_replacing_close_continuation() {
     assert_rfc5234_shape(&out);
 }
 
+/// The open alternatives of a rule, over the tokens `A` and `B`.
+type Opens = fn(Tin, Tin) -> Vec<AltSpec>;
+
+/// A rule of the given open alternatives, named `once` and started
+/// from, with no close.
+fn rule_of_opens(opens: Opens) -> String {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "once".into();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    parser.define_rule("once", move |spec| {
+        spec.clear();
+        for alt in opens(a, b) {
+            spec.add_open(alt);
+        }
+    });
+    abnf(&parser)
+}
+
+/// The entry alone does not make a loop: the whole scaffold does, the
+/// entry, continues that each come back to the rule, and an exit. Each
+/// rule here has the entry and lacks one of the others, and none of them
+/// repeats anything:
+///
+/// - the continue `{ s: A }` never comes back, so with the exit the rule
+///   takes one `A` or nothing;
+/// - `{ s: A, r: once }` comes back and `{ s: B }` does not, so a `B`
+///   ends the rule;
+/// - the continue comes back and there is no exit, so the rule never
+///   stops.
+///
+/// Read as a loop on its entry alone, the first rendered as `*A`, which
+/// takes any number. Each renders as debug's main emits it, the entry a
+/// reference to the rule among its alternatives, with no repetition. The
+/// whole scaffold, last, still reads as the loop it is.
+#[test]
+fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
+    fn back(tin: Tin) -> AltSpec {
+        AltSpec {
+            s: vec![vec![tin]],
+            r: Some("once".into()),
+            ..Default::default()
+        }
+    }
+    fn take(tin: Tin) -> AltSpec {
+        AltSpec {
+            s: vec![vec![tin]],
+            ..Default::default()
+        }
+    }
+    let cases: [(&str, Opens, &str); 3] = [
+        (
+            "a continue that never comes back",
+            |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
+            "once = [ once / A ]\n\nA = %s\"a\"",
+        ),
+        (
+            "one continue of two that does not come back",
+            |a, b| vec![loop_entry("once"), back(a), take(b), AltSpec::new()],
+            "once = [ once / A once / B ]\n\nA = %s\"a\"\nB = %s\"b\"",
+        ),
+        (
+            "no exit",
+            |a, _| vec![loop_entry("once"), back(a)],
+            "once = once / A once\n\nA = %s\"a\"",
+        ),
+    ];
+    for (what, opens, want) in cases {
+        let out = rule_of_opens(opens);
+        assert_eq!(out, want, "{what}:\n{out}");
+        assert!(!out.contains('*'), "{what}, read as a repetition:\n{out}");
+        assert_rfc5234_shape(&out);
+    }
+    let whole = rule_of_opens(|a, _| vec![loop_entry("once"), back(a), AltSpec::new()]);
+    assert_loop_abnf(&whole, "once = *A\n\nA = %s\"a\"");
+}
+
+/// A rule item's loop comes back through its helpers: the continue
+/// replaces with `H$alt0`, which pushes the item and on close replaces
+/// with `H$alt0$step1`, which replaces with `H`. With the step replacing
+/// with nothing, the iteration ends after one item, and the rule is no
+/// loop. It renders as debug's main emits it, with no repetition.
+#[test]
+fn abnf_does_not_read_a_loop_whose_helpers_never_come_back_as_one() {
+    let mut parser = Tabnas::new();
+    let x = parser.token_with_source("#X", "x");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "doc",
+        AltSpec {
+            p: Some("_gen1_star_item".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![x]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(&mut parser, "_gen1_star_item", &[x], "item", end);
+    // The step, which replaced with the loop, now ends the iteration.
+    parser.define_rule("_gen1_star_item$alt0$step1", |spec| {
+        spec.clear();
+        spec.add_open(AltSpec::new());
+    });
+    wrap_start(&mut parser, "doc");
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out,
+        "doc = r-gen1-star-item\nitem = X\n\
+         r-gen1-star-item = [ r-gen1-star-item / r-gen1-star-item-alt0 ]\n\
+         r-gen1-star-item-alt0 = item r-gen1-star-item-alt0-step1\n\
+         r-gen1-star-item-alt0-step1 = \"\"\n\nX = %s\"x\"",
+        "helpers that never come back:\n{out}"
+    );
+    assert!(!out.contains('*'), "read as a repetition:\n{out}");
+    assert_rfc5234_shape(&out);
+}
+
 /// `top = *( "b" *"a" "c" )` with the outer star in the loop shape and
 /// the inner star in the OLD push-chain shape, a mix a hand-built grammar
 /// can carry. A loop's helpers are the rules named after it, `H$alt0` and
