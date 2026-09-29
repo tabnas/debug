@@ -18,13 +18,35 @@
 //! comments, so the output stays valid and self-documenting even though
 //! such rules will not round-trip.
 //!
+//! A repetition is read by SHAPE, not by name. Since tabnas/bnf#80 the
+//! BNF compiler (which abnf, ebnf and gbnf compile through) emits every
+//! `*A` as a replace loop: a helper `H` whose first open alternative is
+//! the entry `{ c: [n.rep == 0], n: {rep: 1}, r: H }` — it consumes
+//! nothing, pushes nothing and replaces the rule with itself under the
+//! guard, allocating the node and counting the iteration — followed by
+//! the continue alternatives that take one item and come back to `H`,
+//! and by the exits (a FOLLOW peek `{ s: FOLLOW, b: 1 }` and `{ }`).
+//! The guard is part of the shape: `s`, `b`, `p` and `r` alone also
+//! describe a user rule's own non-consuming self-replace, a guarded or
+//! counted state transition, which is no repetition. Such a rule is
+//! rendered wherever it is referenced as `*A` / `*( a b )`, and neither
+//! it nor its iteration helpers — `H$alt0` and `H$alt0$step1`, and the
+//! `$alt` / `$step` chains of the foldable groups the iteration pushes,
+//! everything the iteration reaches short of a kept production — is
+//! emitted as a production. The older push chain (`H = A H / ε`, one
+//! frame per item) carries no such entry and renders as before, as a
+//! kept production, wherever it sits, inside a loop's iteration included.
+//!
 //! Ported from `ts/src/debug.ts` (`emitAbnf` and friends), which is
-//! canonical.
+//! canonical — except for the repeat loop above, where THIS PORT LEADS:
+//! the canonical TypeScript and the Go port still list the loop's entry
+//! as one of the rule's own alternatives and follow later. See
+//! `docs/reference.md`, "The repeat loop: the Rust port leads".
 
 use std::collections::BTreeSet;
 
 use indexmap::{IndexMap, IndexSet};
-use tabnas::{AltSpec, RuleSpec, Tabnas, Tin};
+use tabnas::{AltSpec, CompareOp, Condition, RuleSpec, Tabnas, Tin, Value};
 
 /// Map engine rule and token names onto legal ABNF rule names.
 ///
@@ -173,6 +195,19 @@ struct Emitter<'a> {
     /// `bnf` wraps grammars in a synthetic `__start__` rule; when present
     /// it is skipped and the real start leads.
     synth_wrapper: Option<String>,
+    /// The repeat loops: every rule whose open alternatives are the
+    /// compiler's whole scaffold, the entry, the continues that come back
+    /// and an exit (see [`Emitter::is_loop`]). Decided by shape, so a
+    /// hand-built loop and a compiled one read the same, and neither a
+    /// user rule's own self-replace nor an entry without its back edge
+    /// does.
+    loops: BTreeSet<String>,
+    /// The synthetic rules a loop's iteration runs through (`H$alt0`,
+    /// `H$alt0$step1`, and the `$alt` / `$step` chains of the groups it
+    /// pushes), bounded by the kept productions (see
+    /// [`Emitter::find_loop_helpers`]). Inlined into the repetition
+    /// wherever the loop is referenced, never productions.
+    loop_helpers: BTreeSet<String>,
 }
 
 impl<'a> Emitter<'a> {
@@ -184,14 +219,355 @@ impl<'a> Emitter<'a> {
             .collect();
         let synth_wrapper =
             ("__start__" == parser.options.rule.start).then(|| parser.options.rule.start.clone());
-        Self {
+        let mut emitter = Self {
             namer: AbnfNamer::new(rules.keys().cloned()),
             rules,
             used: IndexMap::new(),
             end_tin: parser.options.token("#ZZ"),
             synth_wrapper,
+            loops: BTreeSet::new(),
+            loop_helpers: BTreeSet::new(),
             parser,
+        };
+        emitter.loops = emitter
+            .rules
+            .iter()
+            .filter(|(name, spec)| emitter.is_loop(name, spec))
+            .map(|(name, _)| name.clone())
+            .collect();
+        emitter.loop_helpers = emitter.find_loop_helpers();
+        emitter
+    }
+
+    /// `rule` is a repeat loop: its open alternatives are the compiler's
+    /// whole scaffold, in the compiler's order, not its entry alone. The
+    /// entry comes first ([`is_loop_entry`]); then at least one continue,
+    /// an alternative that consumes, pushes or replaces, and every
+    /// continue comes back to `rule` having made progress
+    /// ([`Emitter::continues_loop`]); and the empty exit `{ }`, an
+    /// alternative that consumes, pushes and replaces nothing and carries
+    /// no condition, since a repetition can stop whatever comes next. No
+    /// continue may follow it: it takes whatever comes and so shadows
+    /// every alternative after it. The FOLLOW peek `{ s: FOLLOW, b: 1 }`
+    /// may stand among the exits too, and shadows only what it peeks: the
+    /// compiler puts one before the continues where a keyword must end
+    /// the loop rather than be taken as an item (`*word "end"` with
+    /// `word = 1*ALPHA`). The compiler never guards an exit, and a rule
+    /// with a contentless alternative under a condition is no loop: the
+    /// condition may never hold, leaving the rule no way to stop, and
+    /// before a continue it shadows it whenever it holds. The
+    /// entry alone read a rule as a loop whose continue never came back:
+    /// the entry, `{ s: A }` and `{ }` take `A` at most once, and were
+    /// emitted as `*A`. A continue that does not come back ends the rule
+    /// after one item, and one that comes back having taken nothing
+    /// repeats nothing, so a rule with either is no repetition. An
+    /// alternative whose route or backtrack a function decides (`p_fn`,
+    /// `r_fn`, `b_fn` and their `_match` forms, a modifier `h`) cannot be
+    /// read, and a rule with one is no loop either. An exit gives back
+    /// exactly what it peeks, and a synthetic loop's closes, if it has
+    /// any, do nothing at all ([`is_idle`]), as the compiler's never do.
+    fn is_loop(&self, rule: &str, spec: &RuleSpec) -> bool {
+        let Some((first, rest)) = spec.open.split_first() else {
+            return false;
+        };
+        if !is_loop_entry(first, rule) || is_dynamic(first) {
+            return false;
         }
+        let (mut continues, mut exit, mut shadowed) = (false, false, false);
+        let dead = shadowed_by_peeks(&spec.open, rule);
+        let (mut live_items, mut dead_items) = (Vec::new(), Vec::new());
+        for (index, alt) in rest.iter().enumerate() {
+            // The compiler writes one entry; a second can never be taken
+            // (the first set its counter) and is neither continue nor exit.
+            if is_dynamic(alt) || is_loop_entry(alt, rule) {
+                return false;
+            }
+            if !has_content(alt, rule, true) {
+                // The compiler never guards an exit: one with a condition
+                // may never stop the rule, and one before a continue
+                // shadows it whenever the condition holds.
+                // The compiler's exits give back exactly what they peek:
+                // the empty exit nothing, a FOLLOW peek its tokens.
+                if !is_plain_way(alt) || alt.b != alt.s.len() || alt.s.iter().any(Vec::is_empty) {
+                    return false;
+                }
+                // Only the empty exit stops the rule whatever comes next,
+                // and shadows every alternative after it.
+                if alt.s.is_empty() {
+                    exit = true;
+                    shadowed = true;
+                }
+            } else if !shadowed && self.continues_loop(alt, rule) {
+                // A continue a FOLLOW peek before it covers never runs, and
+                // does not make the rule a loop. It still renders, as every
+                // continue does, so its item must be one a live continue
+                // takes too, as the compiler's dead continues' are (the
+                // same iteration helper, or the same token with less
+                // lookahead); one with an item of its own would render as
+                // an alternative the rule never takes.
+                let item = self.continue_item(alt, rule);
+                if dead[index + 1] {
+                    dead_items.push(item);
+                } else {
+                    continues = true;
+                    live_items.push(item);
+                }
+            } else {
+                return false;
+            }
+        }
+        continues
+            && exit
+            && dead_items.iter().all(|item| live_items.contains(item))
+            && (!self.is_synthetic(rule) || spec.close.iter().all(is_idle))
+    }
+
+    /// The item a continue of the loop `rule` takes, one of the two shapes
+    /// [`Emitter::continues_loop`] accepts: the token a terminal continue
+    /// consumes, or the rule the iteration helper pushes.
+    fn continue_item(&self, alt: &AltSpec, rule: &str) -> Option<Item> {
+        if alt.r.as_deref() == Some(rule) {
+            return alt.s.first().cloned().map(Item::Token);
+        }
+        let helper = self.rules.get(alt.r.as_deref()?)?;
+        helper.open.first()?.p.clone().map(Item::Rule)
+    }
+
+    /// A continue in one of the compiler's two shapes, coming back to its
+    /// loop `rule` having taken one item. A terminal continue consumes
+    /// its token and replaces with `rule`, giving back any it peeked
+    /// after it (`{ s: [A], r: H }`, `{ s: [A, X], b: 1, r: H }`). A rule
+    /// continue peeks the item's first tokens, gives them all back and
+    /// replaces with the loop's iteration helper
+    /// ([`Emitter::is_iteration_helper`]), which pushes the item and comes
+    /// back. Either sets no counter, carries no guard but the
+    /// suffix-debt counter, and matches no empty token slot, which takes
+    /// any token and renders as nothing. Any other shape, a push beside
+    /// the replace (which the engine takes instead), a helper of another
+    /// shape, one with an empty way through, or one that pushes the loop
+    /// itself, is no continue the compiler writes, and a rule with one is
+    /// no loop.
+    fn continues_loop(&self, alt: &AltSpec, rule: &str) -> bool {
+        if alt.p.is_some()
+            || alt.s.is_empty()
+            || alt.s.iter().any(Vec::is_empty)
+            || !alt.n.is_empty()
+            || !is_guarded_as_compiled(alt)
+        {
+            return false;
+        }
+        match alt.r.as_deref() {
+            Some(target) if target == rule => alt.s.len() == alt.b + 1,
+            Some(target) => alt.s.len() == alt.b && self.is_iteration_helper(target, rule),
+            None => false,
+        }
+    }
+
+    /// `helper` is the iteration helper the compiler gives the loop
+    /// `rule` over a rule item, and nothing else: its one open pushes the
+    /// item (a rule other than `rule`, which reaches `rule` by no
+    /// synthetic way of its own), its one close replaces with its step,
+    /// and the step's one open replaces with `rule`, all matching no
+    /// token and setting no counter but `rep` (`H$alt0` → `H$alt0$step1`
+    /// → `H`).
+    fn is_iteration_helper(&self, helper: &str, rule: &str) -> bool {
+        let bare =
+            |alt: &AltSpec| alt.s.is_empty() && alt.b == 0 && alt.p.is_none() && is_helper_way(alt);
+        let Some(spec) = self.rules.get(helper) else {
+            return false;
+        };
+        let ([open], [close]) = (spec.open.as_slice(), spec.close.as_slice()) else {
+            return false;
+        };
+        let item = match open.p.as_deref() {
+            Some(item) if item != rule => item,
+            _ => return false,
+        };
+        if !open.s.is_empty() || open.b != 0 || open.r.is_some() || !is_helper_way(open) {
+            return false;
+        }
+        if !self.is_synthetic(helper) || !bare(close) || self.reaches(item, rule) {
+            return false;
+        }
+        let Some(step) = close.r.as_deref() else {
+            return false;
+        };
+        let Some(step_spec) = self.rules.get(step) else {
+            return false;
+        };
+        let [step_open] = step_spec.open.as_slice() else {
+            return false;
+        };
+        self.is_synthetic(step)
+            && bare(step_open)
+            && step_open.r.as_deref() == Some(rule)
+            && step_spec.close.iter().all(is_idle)
+    }
+
+    /// `from` reaches `rule`, by a push or a replace, itself or through
+    /// synthetic rules: an item that does repeats `rule` inside its own
+    /// iteration, which the repetition cannot render (its references to
+    /// `rule` read as the iteration's back edge). The compiler's items
+    /// reach their loop, when they do, through a user rule.
+    fn reaches(&self, from: &str, rule: &str) -> bool {
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        let mut pending = vec![from];
+        while let Some(name) = pending.pop() {
+            if name == rule {
+                return true;
+            }
+            if (name != from && !self.is_synthetic(name)) || !visited.insert(name) {
+                continue;
+            }
+            if let Some(spec) = self.rules.get(name) {
+                pending.extend(
+                    spec.open
+                        .iter()
+                        .chain(spec.close.iter())
+                        .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref())),
+                );
+            }
+        }
+        false
+    }
+
+    /// The iteration helpers of every loop `H`: the synthetic rules
+    /// reachable from its continue alternatives without passing through
+    /// a KEPT PRODUCTION, which the walk neither enters nor adds
+    /// ([`Emitter::bounds_loop_helpers`]): `H$alt0`, pushing the item,
+    /// `H$alt0$step1`, replacing with `H`, and the `$alt` / `$step` chain
+    /// the compiler gives a group whose alternative starts with a rule
+    /// (`_gen2_group$alt0`, `_gen2_group$alt0$step1`, `_gen2_group$alt1`
+    /// for `( *A B / C )`). A user rule the iteration pushes keeps its
+    /// production; a nested loop is a loop of its own; an old push-chain
+    /// star stays a kept production, as does a `_plus`, which
+    /// [`Emitter::is_foldable`] judges for itself, a synthetic rule that
+    /// repeats by a cycle of its own ([`Emitter::cycles`]), and one with
+    /// an empty way through ([`Emitter::is_nullable_unfolded`]).
+    ///
+    /// The bound is by kept productions, not by name. A walk that
+    /// stopped only at user rules and other loops reached through a
+    /// foldable group to the old star inside `*( B *A C )` and folded it
+    /// away with its epsilon branch and its back edge: `*( B A C )`. A
+    /// scan for the rules named `H$…` never reached the group's own
+    /// chain, whose `$alt` names [`Emitter::is_foldable`] refuses, so
+    /// `*( *A B / C )` came out as `*( r-gen2-group-alt0 /
+    /// r-gen2-group-alt1 )` over three kept productions, and the `_plus`
+    /// over the same group, refused by [`Emitter::plus_folds`] for the
+    /// same names, as `X *X` in place of `1*X`.
+    fn find_loop_helpers(&self) -> BTreeSet<String> {
+        let mut helpers = BTreeSet::new();
+        let mut pending: Vec<String> = self
+            .loops
+            .iter()
+            .filter_map(|name| self.rules.get(name).map(|spec| (name, spec)))
+            .flat_map(|(name, spec)| {
+                spec.open
+                    .iter()
+                    .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref()))
+                    .filter(|target| *target != name.as_str())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        while let Some(name) = pending.pop() {
+            if self.bounds_loop_helpers(&name)
+                || helpers.contains(&name)
+                || self.cycles(&name)
+                || self.is_nullable_unfolded(&name)
+            {
+                continue;
+            }
+            let Some(spec) = self.rules.get(&name) else {
+                continue;
+            };
+            helpers.insert(name.clone());
+            for alt in spec.open.iter().chain(spec.close.iter()) {
+                if let Some(target) = alt.p.as_deref().or(alt.r.as_deref()) {
+                    pending.push(target.to_owned());
+                }
+            }
+        }
+        helpers
+    }
+
+    /// A synthetic rule with an empty way through its opens, one that
+    /// takes nothing (`{ }`, or a peek it gives back), which nothing but
+    /// a loop's inlining would inline: not an optional's own helper,
+    /// which inlines as `[ … ]`, nor a foldable rule, which inlines
+    /// wherever it is referenced. Inlined as a loop's helper its empty
+    /// way was dropped, `*( A B )` for an iteration that also takes `B`
+    /// alone, so it stays a production of its own, referenced by name,
+    /// as it always was.
+    fn is_nullable_unfolded(&self, name: &str) -> bool {
+        !is_helper(name, "opt")
+            && !self.is_foldable(name)
+            && self
+                .rules
+                .get(name)
+                .is_some_and(|spec| spec.open.iter().any(|alt| !has_content(alt, name, false)))
+    }
+
+    /// A synthetic rule that reaches itself again through synthetic rules
+    /// none of which bounds a loop's helpers ([`Emitter::bounds_loop_helpers`]):
+    /// a repetition of its own, which no loop's iteration accounts for.
+    /// Inlined as a loop's helper, the way back to itself rendered as
+    /// nothing, through `seen`, so the helper `A H / B` pushed from a loop
+    /// came out as `*( A / B )` where the loop takes `*( *A B )`. It stays
+    /// what it was before the loop was read: a production of its own,
+    /// referenced by name. A loop's own `H$alt0` reaches itself only
+    /// through `H`, a loop, and is no cycle.
+    fn cycles(&self, name: &str) -> bool {
+        let targets = |rule: &str| -> Vec<&str> {
+            self.rules
+                .get(rule)
+                .map(|spec| {
+                    spec.open
+                        .iter()
+                        .chain(spec.close.iter())
+                        .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        let mut pending = targets(name);
+        while let Some(target) = pending.pop() {
+            if target == name {
+                return true;
+            }
+            if self.bounds_loop_helpers(target) || !visited.insert(target) {
+                continue;
+            }
+            pending.extend(targets(target));
+        }
+        false
+    }
+
+    /// A rule that is a production of its own, or decides that for
+    /// itself, and so bounds the iteration helpers of every loop: a user
+    /// rule, a loop, or a repetition helper that is no loop's own — an old
+    /// push-chain `_star` with its `$alt` helpers
+    /// ([`Emitter::is_kept_repetition`]), and a `_plus` in either shape,
+    /// which [`Emitter::is_foldable`] judges through
+    /// [`Emitter::plus_folds`]. A loop's own `H$alt0` and `H$alt0$step1`
+    /// carry the loop's whole name, star and all, and are read by their
+    /// own segment: the loop.
+    fn bounds_loop_helpers(&self, name: &str) -> bool {
+        if !self.is_synthetic(name) || self.loops.contains(name) {
+            return true;
+        }
+        matches!(gen_kind(name), Some("star" | "plus")) && !self.loops.contains(own_segment(name))
+    }
+
+    /// A repetition helper in the old push-chain shape, kept as a
+    /// production as it always was: a `_star` that is not a loop, or one
+    /// of its `$alt0` / `$alt0$step1` iteration helpers, which carry its
+    /// name. A loop's own `H$alt0` is not one (its own segment is the
+    /// loop), nor is the `$alt` chain of a group or the `$step` chain of
+    /// a `_plus`.
+    fn is_kept_repetition(&self, name: &str) -> bool {
+        gen_kind(name) == Some("star") && !self.loops.contains(own_segment(name))
     }
 
     /// A rule the abnf forward-compiler synthesised for a `[...]` /
@@ -208,15 +584,114 @@ impl<'a> Emitter<'a> {
     }
 
     /// Only the clean cases fold — `[…]` optionals plus the group / chain
-    /// helpers they inline through. Repetition (`_star` / `_plus`) uses a
-    /// probe-optimised subgraph that does not reconstruct reliably, so
-    /// those rules (and their `$alt…` helpers) are emitted as productions
-    /// unchanged — still a valid, recognition-equivalent grammar.
+    /// helpers they inline through. A repetition in the old push-chain
+    /// shape (`_star` / `_plus` and their `$alt…` helpers) does not
+    /// reconstruct reliably, so those rules are emitted as productions
+    /// unchanged — still a valid, recognition-equivalent grammar. A
+    /// repetition in the loop shape is not decided here: see
+    /// [`Emitter::is_folded`]. The kind is read from the rule's own
+    /// segment ([`gen_kind`]), so a helper named after a repetition it
+    /// merely contains is judged by what it is.
     fn is_foldable(&self, name: &str) -> bool {
-        self.is_synthetic(name)
-            && !name.contains("_star")
-            && !name.contains("_plus")
-            && !name.contains("$alt")
+        if !self.is_synthetic(name) || gen_kind(name) == Some("star") || name.contains("$alt") {
+            return false;
+        }
+        gen_kind(name) != Some("plus") || self.plus_folds(name)
+    }
+
+    /// `1*A` compiles to a `_plus` helper: `A` followed by the star of `A`.
+    /// The helper folds to `A *A` when that star is a loop; with an
+    /// old-shape star, a kept production, the helper stays a production
+    /// too, as it always has. Its own chain is the helper and its `$step`
+    /// helpers, which share its own segment, and only the repetition that
+    /// chain reaches is its trailing star: an old-shape star inside the
+    /// item is the item's, a production of its own referenced by name,
+    /// and neither folds nor stops the fold. It folds only when its own
+    /// chain reaches a loop, and meets no cycle on the way: a helper that
+    /// re-enters itself, or a chain of helpers that comes back round
+    /// without passing through a loop, repeats by that cycle, and folded,
+    /// the cycle's back edge rendered as nothing, so `A*` came out as one
+    /// `A`. Reaches through the chain steps (`_plus$step1`) a non-terminal
+    /// item puts between the helper and its star, and through the group
+    /// it pushes and that group's own `$alt` / `$step` chain, which fold:
+    /// the `_plus` over `( *A B / C )` is `1*( *A B / C )`. Refusing
+    /// every `$alt` name here refused that chain, and the helper came out
+    /// as `X *X`, which does not round-trip on a nullable item.
+    fn plus_folds(&self, name: &str) -> bool {
+        // A depth-first walk with an explicit stack: `open` holds the
+        // rules on the current path, so reaching one again is a cycle;
+        // `done` those whose walk has finished, which a second path may
+        // reach without one. A step is judged by the plus it belongs to,
+        // through the segment they share.
+        let mut open: BTreeSet<String> = BTreeSet::new();
+        let mut done: BTreeSet<String> = BTreeSet::new();
+        let mut reached_loop = false;
+        let mut stack: Vec<(String, Vec<String>)> = Vec::new();
+        let targets = |current: &str| -> Vec<String> {
+            self.rules
+                .get(current)
+                .map(|spec| {
+                    spec.open
+                        .iter()
+                        .chain(spec.close.iter())
+                        .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref()))
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        open.insert(name.to_owned());
+        stack.push((name.to_owned(), targets(name)));
+        while let Some((current, pending)) = stack.last_mut() {
+            let Some(target) = pending.pop() else {
+                open.remove(current.as_str());
+                done.insert(current.clone());
+                stack.pop();
+                continue;
+            };
+            let own = own_segment(current) == own_segment(name);
+            if !self.rules.contains_key(&target) || !self.is_synthetic(&target) {
+                continue;
+            }
+            if self.loops.contains(&target) || self.loop_helpers.contains(&target) {
+                reached_loop |= own && self.loops.contains(&target);
+                continue;
+            }
+            if self.is_kept_repetition(&target) {
+                // The plus's own trailing star in the old shape keeps the
+                // plus a production; one inside the item stays the item's
+                // production, referenced by name.
+                if own {
+                    return false;
+                }
+                continue;
+            }
+            if open.contains(&target) {
+                return false;
+            }
+            if done.contains(&target) {
+                continue;
+            }
+            open.insert(target.clone());
+            let next = targets(&target);
+            stack.push((target, next));
+        }
+        let plus = own_segment(name);
+        reached_loop
+            && self
+                .loop_after(plus)
+                .is_some_and(|tail| self.counted_by_construction(plus, &tail).is_some())
+    }
+
+    /// A rule rendered where it is referenced and never as a production
+    /// of its own, unless it is the start rule: a foldable synthetic, a
+    /// synthetic loop, or a loop's iteration helper. A loop that is a
+    /// USER rule keeps its production (its body is the repetition) and is
+    /// referenced by name.
+    fn is_folded(&self, name: &str) -> bool {
+        self.is_foldable(name)
+            || (self.loops.contains(name) && self.is_synthetic(name))
+            || self.loop_helpers.contains(name)
     }
 
     fn emit(mut self) -> String {
@@ -227,16 +702,18 @@ impl<'a> Emitter<'a> {
             .rules
             .keys()
             .filter(|name| {
-                Some(name.as_str()) != self.synth_wrapper.as_deref() && !self.is_foldable(name)
+                Some(name.as_str()) != self.synth_wrapper.as_deref() && !self.is_folded(name)
             })
             .cloned()
             .collect();
 
+        // The start rule is always a production, folded or not: nothing
+        // encloses it to render it where it is referenced, and a grammar
+        // whose start is a synthetic loop (a standalone `*A`) otherwise
+        // came out with no production at all.
         let mut ordered: Vec<String> = Vec::new();
         let mut seen_rules: BTreeSet<String> = BTreeSet::new();
-        if let Some(start) =
-            start_rule.filter(|start| self.rules.contains_key(start) && !self.is_foldable(start))
-        {
+        if let Some(start) = start_rule.filter(|start| self.rules.contains_key(start)) {
             seen_rules.insert(start.clone());
             ordered.push(start);
         }
@@ -292,6 +769,17 @@ impl<'a> Emitter<'a> {
     /// syntax error that every conforming ABNF tool rejects. `[ A x ]`
     /// says the same thing and is valid.
     fn emit_body(&mut self, name: &str, seen: &BTreeSet<String>) -> String {
+        // A user rule that is a loop: its production IS the repetition.
+        // One that repeats nothing matches exactly the empty string, which
+        // `""` says and an empty production cannot (see below).
+        if self.loops.contains(name) {
+            let body = self.repetition(name, seen);
+            return if body.is_empty() {
+                "\"\"".to_string()
+            } else {
+                body
+            };
+        }
         let opens: Vec<AltSpec> = self
             .rules
             .get(name)
@@ -356,9 +844,9 @@ impl<'a> Emitter<'a> {
             .unwrap_or_default();
         let has_epsilon = closes
             .iter()
-            .any(|alt| !self.is_end_alt(alt) && !has_content(alt));
+            .any(|alt| !self.is_end_alt(alt) && !self.has_content(alt, name));
         for alt in &closes {
-            if self.is_end_alt(alt) || !has_content(alt) {
+            if self.is_end_alt(alt) || !self.has_content(alt, name) {
                 continue;
             }
             let cont = self.seq_of_alt(alt, seen);
@@ -388,11 +876,50 @@ impl<'a> Emitter<'a> {
             .map(|spec| {
                 spec.open
                     .iter()
-                    .filter(|alt| has_content(alt))
+                    .filter(|alt| self.has_content(alt, name))
                     .cloned()
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// [`has_content`] for an alt of `name`, which is a loop or is not:
+    /// only a loop has an entry to skip.
+    fn has_content(&self, alt: &AltSpec, name: &str) -> bool {
+        has_content(alt, name, self.loops.contains(name))
+    }
+
+    /// A loop, as a repetition of its iteration: `*A` when the iteration
+    /// is one element, `*( a b )` otherwise. The iteration is the ` / `-
+    /// joined rendering of the continue alternatives — the open
+    /// alternatives with content — and its back edges render nothing: the
+    /// loop is in `seen`, so `r: H` (from a terminal continue, or from
+    /// `H$alt0$step1` at the end of a ref continue) terminates like any
+    /// other loop-back. The entry, `{ r: H }` consuming nothing, and the
+    /// exits, `{ s: FOLLOW, b: 1 }` and `{ }`, have no content and are
+    /// skipped: they are bookkeeping, not syntax. Any close continuation
+    /// of the loop rule runs once, after the last item, and follows the
+    /// repetition.
+    fn repetition(&mut self, name: &str, seen: &BTreeSet<String>) -> String {
+        let opens = self.content_opens(name);
+        let parts: IndexSet<String> = opens
+            .iter()
+            .map(|alt| self.seq_of_alt(alt, seen))
+            .filter(|item| !item.is_empty())
+            .collect();
+        let iteration = repeat_of(&parts.into_iter().collect::<Vec<_>>());
+        // The loop's own name is seen so that the iteration's back edges
+        // render nothing; a close that re-enters a user loop is no back
+        // edge but the rule again, and renders as its name. (A synthetic
+        // loop's closes do nothing at all: see [`is_idle`].)
+        let cont = if self.is_synthetic(name) {
+            self.close_cont(name, seen)
+        } else {
+            let mut outer = seen.clone();
+            outer.remove(name);
+            self.close_cont(name, &outer)
+        };
+        format!("{iteration} {cont}").trim().to_string()
     }
 
     /// Render one alt as an ABNF element sequence: its `s` tokens then its
@@ -451,9 +978,23 @@ impl<'a> Emitter<'a> {
     /// Inline a reference: a user rule stays a bareword; a synthetic rule
     /// folds back into the ABNF construct it encodes.
     fn inline_ref(&mut self, name: &str, seen: &BTreeSet<String>) -> String {
-        // A user rule, or a kept (non-foldable, e.g. repetition) synthetic
-        // rule, stays a bareword reference; only foldable synthetics inline.
-        if !self.is_foldable(name) {
+        if self.loops.contains(name) {
+            if seen.contains(name) {
+                // The back edge out of the loop's own iteration.
+                return String::new();
+            }
+            if !self.is_synthetic(name) {
+                // A user rule that is a loop keeps its production.
+                return self.namer.rule(name);
+            }
+            let mut inner = seen.clone();
+            inner.insert(name.to_string());
+            return self.repetition(name, &inner);
+        }
+        // A user rule, or a kept (non-foldable, e.g. old-shape repetition)
+        // synthetic rule, stays a bareword reference; only foldable
+        // synthetics and a loop's iteration helpers inline.
+        if !self.is_foldable(name) && !self.loop_helpers.contains(name) {
             return self.namer.rule(name);
         }
         if seen.contains(name) {
@@ -465,19 +1006,176 @@ impl<'a> Emitter<'a> {
         }
         let mut inner = seen.clone();
         inner.insert(name.to_string());
-        if name.contains("_opt") {
+        // The optional's own helper, and only that: a star over an
+        // optional is named after it (`_gen3_star__gen2_opt__gen1_group`),
+        // and so are its iteration helpers, and a substring test for
+        // `_opt` wrapped each of those in `[ … ]` too — `*[ [ T ] [  ] ]`,
+        // with the step, whose only content is the back edge, as an empty
+        // option, which RFC 5234 has no room for. (The canonical
+        // TypeScript still tests the substring; it never inlined those
+        // names, so it never met them. It follows with the loop.)
+        if is_helper(name, "opt") {
             let body = self.rule_seq(name, &inner);
             return format!("[ {body} ]");
         }
+        let body = self.rule_seq(name, &inner);
+        if is_helper(name, "plus") || is_helper(name, "rep") {
+            if let Some(counted) = self.counted_repetition(name, &inner) {
+                return counted;
+            }
+        }
         // group / chain-step: inline the body, parenthesising a bare
         // multi-way alternation that will sit inside a larger sequence.
-        let body = self.rule_seq(name, &inner);
         let multi = 1 < self.content_opens(name).len();
         if multi && self.close_cont(name, &inner).is_empty() {
             format!("( {body} )")
         } else {
             body
         }
+    }
+
+    /// `1*A` compiles to a `_plus` helper that is `A` followed by the star
+    /// of `A`, and `n*A` to a `_rep` helper that is `A` `n` times followed
+    /// by it. Rendered element by element those read `A *A` and `A A *A`:
+    /// the same language as `1*A` and `2*A`, but not the same recogniser
+    /// once recompiled. The abnf crate compiles `A *A` and `1*A`
+    /// differently, and where `A` is nullable, or its FIRST meets its
+    /// FOLLOW, the recompiled `A *A` rejects inputs the original accepts:
+    /// `1*( [ "+" "e" ] )` on `+e`, `1*item` with `item = "]" "e" / [ "d" ]`
+    /// on `]e`. So a helper whose body is the item of the loop it ends in,
+    /// `n` times, then that loop's repetition is written back as the
+    /// repetition it was compiled from: `1*A`, `1*[ A ]`, `2*( a b )`. Any
+    /// other body renders as it is: a bounded `2*4A` compiles to nested
+    /// optionals and ends in no loop, and a hand-built rule that merely
+    /// carries the name is whatever it says.
+    fn counted_repetition(&mut self, name: &str, seen: &BTreeSet<String>) -> Option<String> {
+        let loop_name = self.loop_after(name)?;
+        let count = self.counted_by_construction(name, &loop_name)?;
+        let mut inner = seen.clone();
+        inner.insert(loop_name.clone());
+        let repetition = self.repetition(&loop_name, &inner);
+        repetition
+            .starts_with('*')
+            .then(|| format!("{count}{repetition}"))
+    }
+
+    /// How many times the chain of the `_plus` / `_rep` helper `name`
+    /// takes the item of the loop `tail` it ends in, when it is the
+    /// compiler's construction and nothing else: each rule of the chain
+    /// has one plain open alternative, consuming the loop's item token
+    /// (`{ s: [A], p: tail }` for `1*"a"`, `{ s: [A A], … }` for `2*"a"`)
+    /// or pushing the loop's item rule (`{ p: item }`, then a close
+    /// replace to the next step), and the last pushes `tail` and ends.
+    /// A chain that takes anything else, or a different rule that
+    /// merely renders the same, is no counted repetition: `X *X` and
+    /// `1*X` compile to different recognisers, and only the compiler's
+    /// own construction is the `1*X` it was compiled from.
+    fn counted_by_construction(&self, name: &str, tail: &str) -> Option<usize> {
+        let item = self.loop_item(tail)?;
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        let mut current = name;
+        let mut count = 0usize;
+        loop {
+            if !visited.insert(current) {
+                return None;
+            }
+            let spec = self.rules.get(current)?;
+            let [open] = spec.open.as_slice() else {
+                return None;
+            };
+            if !is_plain_way(open) || open.b != 0 || open.r.is_some() {
+                return None;
+            }
+            for slot in &open.s {
+                if item != Item::Token(slot.clone()) {
+                    return None;
+                }
+                count += 1;
+            }
+            match open.p.as_deref() {
+                Some(target) if target == tail => {
+                    let ends = spec.close.iter().all(|alt| {
+                        is_plain_way(alt) && alt.s.is_empty() && alt.p.is_none() && alt.r.is_none()
+                    });
+                    return (ends && 0 < count).then_some(count);
+                }
+                Some(target) if item == Item::Rule(target.to_owned()) => count += 1,
+                Some(_) => return None,
+                None => {}
+            }
+            let [close] = spec.close.as_slice() else {
+                return None;
+            };
+            if !is_plain_way(close) || !close.s.is_empty() || close.p.is_some() {
+                return None;
+            }
+            current = close.r.as_deref()?;
+        }
+    }
+
+    /// The one item the loop `rule` repeats, as the compiler builds it:
+    /// the token its terminal continues consume (`{ s: [A], r: rule }`,
+    /// or `{ s: [A, X], b: 1, r: rule }` with a token of lookahead),
+    /// or the rule its iteration helper pushes, after a continue that
+    /// peeks one of that rule's FIRST tokens (`{ s: [A], b: 1, r:
+    /// rule$alt0 }`, `rule$alt0` opening `{ p: item }`). None for a loop
+    /// over anything else.
+    fn loop_item(&self, rule: &str) -> Option<Item> {
+        let spec = self.rules.get(rule)?;
+        let mut item: Option<Item> = None;
+        for alt in spec.open.iter().skip(1) {
+            if !has_content(alt, rule, true) {
+                continue;
+            }
+            let this = if alt.r.as_deref() == Some(rule) && alt.s.len() == alt.b + 1 {
+                // It consumes its one token and gives back any it peeked
+                // after it (`{ s: [A, X], b: 1 }`, where the compiler looks
+                // two tokens ahead).
+                Item::Token(alt.s[0].clone())
+            } else if alt.s.len() == alt.b {
+                let helper = self.rules.get(alt.r.as_deref()?)?;
+                let [open] = helper.open.as_slice() else {
+                    return None;
+                };
+                if !open.s.is_empty() || open.r.is_some() || !is_plain_way(open) {
+                    return None;
+                }
+                Item::Rule(open.p.clone()?)
+            } else {
+                return None;
+            };
+            match &item {
+                None => item = Some(this),
+                Some(seen) if *seen == this => {}
+                Some(_) => return None,
+            }
+        }
+        item
+    }
+
+    /// The loop a `_plus` / `_rep` helper ends in: the open target of the
+    /// last rule of its chain (`H`, `H$step1`, … linked by their close
+    /// replaces), when that target is a loop. The chain is followed by its
+    /// close edges only, never into the pushed item, which may hold a
+    /// loop of its own.
+    fn loop_after(&self, name: &str) -> Option<String> {
+        let mut visited: BTreeSet<String> = BTreeSet::new();
+        let mut current = name.to_string();
+        loop {
+            if !visited.insert(current.clone()) {
+                return None;
+            }
+            let spec = self.rules.get(&current)?;
+            match spec.close.iter().find_map(|alt| alt.r.clone()) {
+                Some(next) if self.rules.contains_key(&next) => current = next,
+                _ => break,
+            }
+        }
+        let spec = self.rules.get(&current)?;
+        spec.open
+            .iter()
+            .find_map(|alt| alt.p.clone().or_else(|| alt.r.clone()))
+            .filter(|target| self.loops.contains(target))
     }
 
     /// Render a token reference: every token appears by its bare NAME
@@ -517,9 +1215,262 @@ fn is_gen_name(name: &str) -> bool {
         .is_some_and(|ch| ch.is_ascii_digit())
 }
 
-/// An alt that contributes something to the emitted sequence.
-fn has_content(alt: &AltSpec) -> bool {
-    !alt.s.is_empty() || alt.p.is_some() || alt.r.is_some()
+/// The construct a synthesised name encodes — `opt`, `group`, `star`,
+/// `plus`, `rep` — read from the rule's OWN segment: the word after
+/// `_gen<n>_` in the part before any `$`. A repetition's helper is named
+/// after its item, so `_gen3_star__gen2_opt__gen1_group` is the star over
+/// the optional over the group, and its iteration helpers
+/// `…$alt0` / `…$alt0$step1` carry the whole of that name; a substring
+/// test for `_opt` reached all of them. A chain step (`_gen1_group$step1`)
+/// answers with the kind of the rule it continues.
+fn gen_kind(name: &str) -> Option<&str> {
+    let rest = own_segment(name).strip_prefix("_gen")?;
+    let digits = rest.len()
+        - rest
+            .trim_start_matches(|ch: char| ch.is_ascii_digit())
+            .len();
+    if digits == 0 {
+        return None;
+    }
+    let rest = rest[digits..].strip_prefix('_')?;
+    let kind = rest.split('_').next().unwrap_or(rest);
+    (!kind.is_empty()).then_some(kind)
+}
+
+/// The rule a synthesised name belongs to: the part before any `$`. A
+/// chain step (`_gen1_group$step1`) and an iteration helper (`H$alt0`,
+/// `H$alt0$step1`) answer with the rule they continue.
+fn own_segment(name: &str) -> &str {
+    name.split('$').next().unwrap_or(name)
+}
+
+/// `name` is the helper of `kind` itself — not a chain step or an
+/// iteration helper of it, which carry a `$`.
+fn is_helper(name: &str, kind: &str) -> bool {
+    !name.contains('$') && gen_kind(name) == Some(kind)
+}
+
+/// An alt that contributes something to the emitted sequence of `rule`,
+/// decided by what it CONSUMES: it eats a token (`len(s) - b > 0`), or
+/// pushes a rule, or replaces with a rule — unless `rule` is a loop and
+/// this is its entry ([`is_loop_entry`]). `{ }`, the FOLLOW peek
+/// `{ s: FOLLOW, b: 1 }` and the entry `{ c: [n.rep == 0], n: {rep: 1},
+/// r: rule }` are all epsilon: none of them moves the parse past any
+/// input. Counting the peek as content rendered a follow-guarded exit
+/// as a consuming alternative, and counting the entry rendered a loop
+/// as one of its own alternatives. Every other replace with `rule`
+/// itself is content, as it always was: the close `{ s: A, b: 1, r: rule }`
+/// after an open that consumed `A` is the `[ rule ]` of
+/// `rule = A [ rule ]`, and calling it empty for the self-replace alone
+/// emitted `rule = A`, exactly one where the rule takes one or more. The
+/// same close carrying the entry's guard and counter is content too when
+/// `rule` is no loop (`rule_is_loop`, decided by its OPEN alternatives):
+/// a rule that is not a loop has no entry, only alternatives, and
+/// `odd = A [ odd ]` renders as it always did.
+fn has_content(alt: &AltSpec, rule: &str, rule_is_loop: bool) -> bool {
+    !(rule_is_loop && is_loop_entry(alt, rule))
+        && (alt.s.len() > alt.b || alt.p.is_some() || alt.r.is_some())
+}
+
+/// The one item a loop repeats ([`Emitter::loop_item`]): a token slot its
+/// continue consumes, or the rule its iteration helper pushes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Item {
+    Token(Vec<Tin>),
+    Rule(String),
+}
+
+/// An alternative whose route, backtrack or whole shape a function
+/// decides when it matches, so what it pushes, replaces or consumes
+/// cannot be read from the spec.
+fn is_dynamic(alt: &AltSpec) -> bool {
+    alt.p_fn.is_some()
+        || alt.p_match.is_some()
+        || alt.r_fn.is_some()
+        || alt.r_match.is_some()
+        || alt.b_fn.is_some()
+        || alt.b_match.is_some()
+        || alt.h.is_some()
+        || alt.h_match.is_some()
+}
+
+/// A continue guarded as the compiler guards one: by nothing, or by the
+/// suffix-debt counter alone (`n.debt_… == 0`, which tabnas-bnf puts on
+/// a left-recursion tail loop's contested branches). Any other
+/// condition may contradict the state the entry leaves (`n.rep == 0`
+/// after the entry has set it to 1) and keep the continue from ever
+/// running, so a rule with one is no loop.
+fn is_guarded_as_compiled(alt: &AltSpec) -> bool {
+    !is_dynamic(alt)
+        && matches!(alt.c.as_slice(), [] | [_])
+        && alt.c.iter().all(is_debt_guard)
+        && alt.c_ref.is_none()
+        && alt.c_fn.is_none()
+        && alt.c_match.is_none()
+        && alt.c_lex.is_none()
+        && alt.c_lex_match.is_none()
+}
+
+/// The suffix-debt guard, `n.debt_… == 0`.
+fn is_debt_guard(condition: &Condition) -> bool {
+    matches!(condition.path.as_slice(), [bag, counter] if bag == "n" && counter.starts_with("debt_"))
+        && condition.op == CompareOp::Eq
+        && matches!(condition.value, Value::Number(count) if count == 0.0)
+}
+
+/// An alternative that does nothing: it matches no token, pushes and
+/// replaces nothing, and carries no condition. The compiler's loops have
+/// no closes, and a synthetic rule is a loop only when its closes, if it
+/// has any, are all idle. A synthetic loop renders inline, wherever a
+/// rule refers to it, with no name of its own to render there, so a
+/// close that could run it again would be lost: one that re-enters it,
+/// directly or through helpers, one that pushes, which comes back to the
+/// close phase when the pushed rule ends and runs the closes again, or
+/// one a function routes. Each was found in turn, and the compiler writes
+/// none of them.
+fn is_idle(alt: &AltSpec) -> bool {
+    alt.s.is_empty() && alt.b == 0 && alt.p.is_none() && alt.r.is_none() && is_plain_way(alt)
+}
+
+/// An alternative on a loop's way back, as the compiler writes one: a
+/// plain way ([`is_plain_way`]) that sets no counter but the loop's own
+/// `rep` (the iteration helper counts it). Another counter could turn a
+/// guarded continue off for the next iteration.
+fn is_helper_way(alt: &AltSpec) -> bool {
+    is_plain_way(alt) && alt.n.keys().all(|counter| counter == "rep")
+}
+
+/// For each open alternative of the loop `rule`, whether it is a continue
+/// that a FOLLOW peek before it covers, and so never runs: the peek
+/// matches wherever the continue would. The compiler writes such dead
+/// continues where FIRST meets FOLLOW (`{ s: [C], b: 1 }`, then
+/// `{ s: [C], b: 1, r: H$alt0 }`, with the live continues that look
+/// further ahead before both); a rule is a loop only when some continue
+/// is live, and a hand-built one with nothing but dead ones (`{ s: A,
+/// b: 1 }` before `{ s: A, r: H }`) takes no item at all.
+fn shadowed_by_peeks(open: &[AltSpec], rule: &str) -> Vec<bool> {
+    let mut peeks: Vec<&[Vec<Tin>]> = Vec::new();
+    open.iter()
+        .map(|alt| {
+            if !has_content(alt, rule, true) {
+                if !alt.s.is_empty() {
+                    peeks.push(&alt.s);
+                }
+                false
+            } else {
+                peeks.iter().any(|peek| covers(peek, &alt.s))
+            }
+        })
+        .collect()
+}
+
+/// The token sequence `peek` matches wherever `item` does: it is no
+/// longer, and each of its slots holds every token `item`'s does.
+fn covers(peek: &[Vec<Tin>], item: &[Vec<Tin>]) -> bool {
+    peek.len() <= item.len()
+        && peek
+            .iter()
+            .zip(item)
+            .all(|(slot, other)| other.iter().all(|tin| slot.contains(tin)))
+}
+
+/// An alternative a loop's helper can come back through: read from the
+/// spec alone, and taken whatever the rule's state, with no condition of
+/// any kind.
+fn is_plain_way(alt: &AltSpec) -> bool {
+    !is_dynamic(alt)
+        && alt.c.is_empty()
+        && alt.c_ref.is_none()
+        && alt.c_fn.is_none()
+        && alt.c_match.is_none()
+        && alt.c_lex.is_none()
+        && alt.c_lex_match.is_none()
+}
+
+/// A repeat loop's entry, the whole of the compiler's shape: the
+/// alternative matches no token, not even a peeked one (which would
+/// leave the counter unset wherever that token is not next), pushes
+/// nothing, replaces `rule` with
+/// itself, is guarded by `n.rep == 0` and by nothing else, and sets that
+/// counter to 1 and no other — allocating the node and counting the iteration on the
+/// way in. A further condition, in `c` or any other channel, may keep
+/// the entry from running, and with it the counter it sets, which the
+/// continues may be guarded on. It is
+/// what marks a rule as a loop. `s`, `b`, `p` and `r` alone are not
+/// enough: a user rule's own non-consuming self-replace, a guarded or
+/// counted state transition, has the same four and is no repetition, and
+/// reading it as one rewrote the whole rule as `*…`, accepting empty and
+/// repeated inputs the original need not.
+fn is_loop_entry(alt: &AltSpec, rule: &str) -> bool {
+    alt.s.is_empty()
+        && alt.b == 0
+        && alt.p.is_none()
+        && alt.r.as_deref() == Some(rule)
+        && alt.n.len() == 1
+        && alt.n.get("rep") == Some(&1)
+        && matches!(alt.c.as_slice(), [guard] if is_rep_guard(guard))
+        && alt.c_ref.is_none()
+        && alt.c_fn.is_none()
+        && alt.c_match.is_none()
+        && alt.c_lex.is_none()
+        && alt.c_lex_match.is_none()
+}
+
+/// The entry's guard, `n.rep == 0`: the counter the entry sets is still
+/// at its start, so this is the first time through.
+fn is_rep_guard(condition: &Condition) -> bool {
+    condition.path == ["n", "rep"]
+        && condition.op == CompareOp::Eq
+        && matches!(condition.value, Value::Number(count) if count == 0.0)
+}
+
+/// A repetition over the ` / `-joined alternatives of an iteration:
+/// `*A` and `*"a"` when the iteration is one element, `*( a b )` and
+/// `*( a / b )` otherwise. A single element that is already a group or an
+/// option (`( A / B )`, the rendering of an inlined multi-way group) is
+/// not wrapped again. An empty iteration is an empty repetition: nothing.
+fn repeat_of(parts: &[String]) -> String {
+    match parts {
+        [] => String::new(),
+        [only] if is_one_element(only) => format!("*{only}"),
+        _ => format!("*( {} )", parts.join(" / ")),
+    }
+}
+
+/// `text` is one ABNF element: a bare name or terminal, or one bracket
+/// pair enclosing the whole of it. A repetition is not an element
+/// (`repetition = [repeat] element`), so a nested `*I` has to be grouped:
+/// `*( *I )`, never `**I`. A production body holds only names, `( … )`,
+/// `[ … ]`, `*…` and `""`, so counting brackets is exact.
+fn is_one_element(text: &str) -> bool {
+    if text.starts_with(|ch: char| ch == '*' || ch.is_ascii_digit()) {
+        return false;
+    }
+    if !text.contains(' ') {
+        return true;
+    }
+    let mut chars = text.chars();
+    let (Some(open), Some(close)) = (chars.next(), chars.next_back()) else {
+        return false;
+    };
+    if !matches!((open, close), ('(', ')') | ('[', ']')) {
+        return false;
+    }
+    // The opening bracket must be the one the last character closes.
+    let mut depth = 0usize;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && index + ch.len_utf8() < text.len() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 /// The legend definition for a token — what it matches:
@@ -737,6 +1688,8 @@ fn unescape_regex_literal(source: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
@@ -767,6 +1720,195 @@ mod tests {
         assert_eq!(namer.rule("NR"), "NR");
         // A token whose name no rule claims is unaffected.
         assert_eq!(namer.token("PL"), "PL");
+    }
+
+    fn alt(s: &[Tin], b: usize, p: Option<&str>, r: Option<&str>) -> AltSpec {
+        AltSpec {
+            s: s.iter().map(|tin| vec![*tin]).collect(),
+            b,
+            p: p.map(str::to_owned),
+            r: r.map(str::to_owned),
+            ..Default::default()
+        }
+    }
+
+    /// The compiler's loop entry: `{ c: [n.rep == 0], n: {rep: 1}, r: rule }`.
+    fn entry(rule: &str) -> AltSpec {
+        AltSpec {
+            c: vec![Condition {
+                path: vec!["n".into(), "rep".into()],
+                op: CompareOp::Eq,
+                value: Value::Number(0.0),
+            }],
+            n: HashMap::from([("rep".to_string(), 1)]),
+            r: Some(rule.to_owned()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn content_is_what_an_alt_consumes() {
+        // `H` is a loop here; the last case renders a rule that is not.
+        let in_loop = |alt: &AltSpec| has_content(alt, "H", true);
+        // Eats a token.
+        assert!(in_loop(&alt(&[7], 0, None, None)));
+        // Peeks one and gives it back: the follow-guarded exit.
+        assert!(!in_loop(&alt(&[7], 1, None, None)));
+        // Nothing at all.
+        assert!(!in_loop(&alt(&[], 0, None, None)));
+        // Pushes a rule.
+        assert!(in_loop(&alt(&[], 0, Some("item"), None)));
+        // Replaces with another rule, after a peek.
+        assert!(in_loop(&alt(&[7], 1, None, Some("H$alt0"))));
+        // The loop entry: replaces with the rule being rendered, guarded.
+        assert!(!in_loop(&entry("H")));
+        // The same alt is content from any OTHER rule's point of view.
+        assert!(has_content(&entry("H"), "H$alt0$step1", false));
+        // A self-replace WITHOUT the guard is not the entry and keeps its
+        // content: a user rule's own state transition.
+        assert!(in_loop(&alt(&[], 0, None, Some("H"))));
+        // So does the guarded one-or-more continuation, a close alt
+        // `{ s: A, b: 1, r: H }`: the `[ H ]` of `H = A [ H ]`.
+        assert!(in_loop(&alt(&[7], 1, None, Some("H"))));
+        // And the entry's own shape, guard and counter included, when the
+        // rule being rendered is NOT a loop: it has no entry to skip.
+        assert!(has_content(&entry("odd"), "odd", false));
+        assert!(!has_content(&entry("odd"), "odd", true));
+        // With a peek it is no entry at all, whatever the rule: the close
+        // `{ c: [n.rep == 0], n: {rep: 1}, s: A, b: 1, r: odd }` is the
+        // `[ odd ]` of `odd = A [ odd ]`.
+        let guarded_close = AltSpec {
+            s: vec![vec![7]],
+            b: 1,
+            ..entry("odd")
+        };
+        assert!(has_content(&guarded_close, "odd", false));
+        assert!(has_content(&guarded_close, "odd", true));
+    }
+
+    #[test]
+    fn a_synthesised_name_belongs_to_its_own_segment() {
+        assert_eq!(own_segment("_gen2_group"), "_gen2_group");
+        assert_eq!(own_segment("_gen2_group$alt0$step1"), "_gen2_group");
+        assert_eq!(
+            own_segment("_gen3_star__gen2_group$alt0"),
+            "_gen3_star__gen2_group"
+        );
+        assert_eq!(own_segment("top"), "top");
+    }
+
+    #[test]
+    fn a_loop_entry_is_the_whole_compiler_shape() {
+        assert!(is_loop_entry(&entry("H"), "H"));
+        // A terminal continue consumes its token first.
+        let terminal = AltSpec {
+            s: vec![vec![7]],
+            ..entry("H")
+        };
+        assert!(!is_loop_entry(&terminal, "H"));
+        // A peek, even one given back, is not the entry either: it sets
+        // the counter only where that token comes next.
+        let peek = AltSpec {
+            s: vec![vec![7]],
+            b: 1,
+            ..entry("H")
+        };
+        assert!(!is_loop_entry(&peek, "H"));
+        // Replacing with another rule, or pushing, is not the entry.
+        let other = AltSpec {
+            r: Some("H$alt0".into()),
+            ..entry("H")
+        };
+        assert!(!is_loop_entry(&other, "H"));
+        let push = AltSpec {
+            p: Some("H".into()),
+            ..entry("H")
+        };
+        assert!(!is_loop_entry(&push, "H"));
+        // Nor is the same self-replace without the guard, with another
+        // guard, with the guard on another value, or without the counter:
+        // `s`, `b`, `p` and `r` alone do not make a loop.
+        assert!(!is_loop_entry(&alt(&[], 0, None, Some("H")), "H"));
+        let unguarded = AltSpec {
+            c: vec![],
+            ..entry("H")
+        };
+        assert!(!is_loop_entry(&unguarded, "H"));
+        let other_guard = AltSpec {
+            c: vec![Condition {
+                path: vec!["n".into(), "mode".into()],
+                op: CompareOp::Eq,
+                value: Value::Number(0.0),
+            }],
+            ..entry("H")
+        };
+        assert!(!is_loop_entry(&other_guard, "H"));
+        let second_time = AltSpec {
+            c: vec![Condition {
+                path: vec!["n".into(), "rep".into()],
+                op: CompareOp::Eq,
+                value: Value::Number(1.0),
+            }],
+            ..entry("H")
+        };
+        assert!(!is_loop_entry(&second_time, "H"));
+        let uncounted = AltSpec {
+            n: HashMap::new(),
+            ..entry("H")
+        };
+        assert!(!is_loop_entry(&uncounted, "H"));
+    }
+
+    #[test]
+    fn a_synthetic_kind_is_read_from_its_own_segment() {
+        assert_eq!(gen_kind("_gen1_star_term"), Some("star"));
+        assert_eq!(gen_kind("_gen2_opt__gen1_group"), Some("opt"));
+        assert_eq!(gen_kind("_gen1_group"), Some("group"));
+        // A star over an optional is named after it, and is a star.
+        assert_eq!(gen_kind("_gen3_star__gen2_opt__gen1_group"), Some("star"));
+        assert_eq!(gen_kind("_gen3_plus__gen2_opt__gen1_group"), Some("plus"));
+        // The iteration helpers and chain steps answer for their rule.
+        assert_eq!(
+            gen_kind("_gen3_star__gen2_opt__gen1_group$alt0"),
+            Some("star")
+        );
+        assert_eq!(
+            gen_kind("_gen3_star__gen2_opt__gen1_group$alt0$step1"),
+            Some("star")
+        );
+        assert_eq!(gen_kind("_gen1_group$step1"), Some("group"));
+        // Not synthesised: a user rule, whatever it embeds.
+        assert_eq!(gen_kind("my_opt"), None);
+        assert_eq!(gen_kind("top$step1"), None);
+        assert_eq!(gen_kind("_genx_opt"), None);
+        assert_eq!(gen_kind("_gen1"), None);
+        assert_eq!(gen_kind("_gen1__x"), None);
+        // The helper itself, and only the helper, is wrapped as one.
+        assert!(is_helper("_gen2_opt__gen1_group", "opt"));
+        assert!(!is_helper("_gen3_star__gen2_opt__gen1_group", "opt"));
+        assert!(!is_helper("_gen3_star__gen2_opt__gen1_group$alt0", "opt"));
+        assert!(!is_helper(
+            "_gen3_star__gen2_opt__gen1_group$alt0$step1",
+            "opt"
+        ));
+        assert!(!is_helper("_gen3_plus__gen2_opt__gen1_group$step1", "plus"));
+        assert!(is_helper("_gen3_plus__gen2_opt__gen1_group", "plus"));
+    }
+
+    #[test]
+    fn a_repetition_groups_all_but_one_element() {
+        let parts = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(repeat_of(&parts(&[])), "");
+        assert_eq!(repeat_of(&parts(&["A"])), "*A");
+        assert_eq!(repeat_of(&parts(&["a b"])), "*( a b )");
+        assert_eq!(repeat_of(&parts(&["A", "B"])), "*( A / B )");
+        // An inlined multi-way group is already one element.
+        assert_eq!(repeat_of(&parts(&["( A / B )"])), "*( A / B )");
+        assert_eq!(repeat_of(&parts(&["[ A ]"])), "*[ A ]");
+        // Two groups are two elements, whatever the ends look like.
+        assert_eq!(repeat_of(&parts(&["( A ) ( B )"])), "*( ( A ) ( B ) )");
+        // A repetition is not an element: `**I` is not ABNF.
+        assert_eq!(repeat_of(&parts(&["*I"])), "*( *I )");
     }
 
     #[test]

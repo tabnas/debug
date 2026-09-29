@@ -69,6 +69,14 @@ version to fall back on and no second resolution to keep green. Clone
    `TestAbnf*` set in `../go`. Keep the three sets in step, and treat a
    shape that only one of them holds as a gap rather than a choice.
 
+   One such gap is open and deliberate: the repeat-loop shapes in
+   `tests/abnf_test.rs` (the replace loop tabnas/bnf#80 compiles every
+   repetition to) are held here alone, because the Rust emitter LEADS
+   the canonical on them. `src/abnf.rs` reads the loop by shape and
+   renders `*A` / `*( a b )`; TypeScript and Go still render the loop as
+   one of its own alternatives and follow later. The register entry is
+   `../docs/reference.md`, "The repeat loop: the Rust port leads".
+
 4. **`step` never fires.** The Rust engine has no `ctx.log` and emits no
    per-step event, so `TraceKinds::step` is accepted for option-name
    parity and logs nothing — and a selection of `step` alone installs no

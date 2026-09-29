@@ -16,10 +16,19 @@
 //! one even in a test without putting that independence claim in doubt.
 //! So both ports pin the same shapes by asserting the emitted text, and
 //! this file is the Rust half.
+//!
+//! The repeat-loop shapes (`loop_*` and `abnf_renders_a_*_loop_*` below)
+//! are held by this set ALONE for now: tabnas/bnf#80 changed how every
+//! repetition compiles, and the Rust emitter leads the canonical
+//! TypeScript and the Go port there (`docs/reference.md`, "The repeat
+//! loop: the Rust port leads"). When those follow, their suites take the
+//! same shapes.
 
 mod common;
 
-use tabnas::{AltSpec, Tabnas, Tin};
+use std::collections::HashMap;
+
+use tabnas::{AltSpec, CompareOp, Condition, RuleSpec, Tabnas, Tin, Value};
 use tabnas_debug::abnf;
 
 /// Resolve a built-in token identity, failing loudly if the engine has
@@ -79,11 +88,14 @@ fn is_legal_rulename(name: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || '-' == ch)
 }
 
-/// The shape the ABNF compiler emits for a repetition (`rep = *T`): a
-/// `_gen…_star_…` production whose empty open alternative marks it
-/// zero-or-more. Unlike `[ … ]`, repetition uses a probe-optimised
-/// subgraph that does not reconstruct as `*( … )` reliably, so the
-/// emitter must KEEP it as a production rather than fold it.
+/// The shape the ABNF compiler emitted for a repetition (`rep = *T`)
+/// before tabnas/bnf#80: a `_gen…_star_…` production whose empty open
+/// alternative marks it zero-or-more, and whose item alternative would
+/// push the rule again for the next item (a push chain; this hand-built
+/// one stops at a single item). It carries no self-replace entry, so it
+/// is not a loop, and it does not reconstruct as `*( … )` reliably, so
+/// the emitter must KEEP it as a production rather than fold it — exactly
+/// as it did before the loop shape existed.
 fn star_grammar() -> Tabnas {
     let mut parser = Tabnas::new();
     parser.options.rule.start = "rep".into();
@@ -110,12 +122,13 @@ fn star_grammar() -> Tabnas {
     parser
 }
 
-/// A `_gen…_star_…` synthetic is NOT folded. It stays a bareword
-/// reference in its parent and is emitted as its own production. Beyond
-/// the folding rule this pins two things RFC 5234 requires: the empty
-/// alternative renders as `[ … ]` rather than a trailing `/`, and the
-/// synthetic name is sanitised to a legal rulename, so `_gen1_star_T`
-/// comes out as `r-gen1-star-T`.
+/// An old-shape `_gen…_star_…` synthetic is NOT folded. It stays a
+/// bareword reference in its parent and is emitted as its own production.
+/// Beyond the folding rule this pins two things RFC 5234 requires: the
+/// empty alternative renders as `[ … ]` rather than a trailing `/`, and
+/// the synthetic name is sanitised to a legal rulename, so `_gen1_star_T`
+/// comes out as `r-gen1-star-T`. The pinned text is unchanged by the loop
+/// rendering: a rule without the self-replace entry renders as before.
 #[test]
 fn abnf_keeps_a_repetition_production() {
     let out = abnf(&star_grammar());
@@ -406,4 +419,2369 @@ fn every_fixture_grammar_emits_rfc5234_shaped_abnf() {
         let parser = common::fixture::build(name).expect("a known grammar");
         assert_rfc5234_shape(&abnf(&parser));
     }
+}
+
+// ---------------------------------------------------------------------
+// The repeat loop: the shape every repetition compiles to since
+// tabnas/bnf#80. Hand-built here, alternate for alternate, from what the
+// compiler emits (the emitter must never gain an ABNF dependency, so no
+// test compiles ABNF source), for `*A` with helper `H`:
+//
+//   H             open   { c: {n.rep: 0}, n: {rep: 1}, r: H }   entry: allocate, count
+//                        { s: FIRST(A), b: 1, r: H$alt0 } …     continue (a ref item)
+//                        { s: A, r: H }                         continue (a terminal item)
+//                        { s: FOLLOW(H), b: 1 }  { }            exits
+//   H$alt0        open   { p: A, n: {rep: 0} }                  push the item
+//                 close  { r: H$alt0$step1, n: {rep: 1} }       capture it
+//   H$alt0$step1  open   { r: H }                               back to the loop
+//
+// and the whole grammar wrapped in the compiler's `__start__`.
+// ---------------------------------------------------------------------
+
+/// The `__start__` wrapper the bnf compiler puts round every grammar: its
+/// open pushes the real start rule and its close matches `#ZZ`. The
+/// emitter sees through it and leads with the real start.
+fn wrap_start(parser: &mut Tabnas, start: &str) {
+    let end = token(parser, "#ZZ");
+    parser.options.rule.start = "__start__".into();
+    let start = start.to_string();
+    parser.define_rule("__start__", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            p: Some(start),
+            ..Default::default()
+        });
+        spec.add_close(AltSpec {
+            s: vec![vec![end]],
+            ..Default::default()
+        });
+    });
+}
+
+/// A loop's entry: consumes nothing, replaces the rule with itself,
+/// guarded by the iteration counter it bumps. Bookkeeping, not syntax.
+fn loop_entry(name: &str) -> AltSpec {
+    counted(
+        AltSpec {
+            c: vec![Condition {
+                path: vec!["n".into(), "rep".into()],
+                op: CompareOp::Eq,
+                value: Value::Number(0.0),
+            }],
+            r: Some(name.into()),
+            ..Default::default()
+        },
+        1,
+    )
+}
+
+fn counted(alt: AltSpec, rep: i32) -> AltSpec {
+    AltSpec {
+        n: HashMap::from([("rep".to_string(), rep)]),
+        ..alt
+    }
+}
+
+/// A loop's exits: peek the FOLLOW token and give it back, then anything
+/// else (and the end of the input).
+fn loop_exits(spec: &mut RuleSpec, follow: Tin) {
+    spec.add_open(AltSpec {
+        s: vec![vec![follow]],
+        b: 1,
+        ..Default::default()
+    });
+    spec.add_open(AltSpec::new());
+}
+
+/// `*A` over a terminal item: the continue matches the token and
+/// re-enters the loop directly.
+fn terminal_loop(parser: &mut Tabnas, name: &str, item: Tin, follow: Tin) {
+    let rule = name.to_string();
+    parser.define_rule(name, move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry(&rule));
+        spec.add_open(AltSpec {
+            s: vec![vec![item]],
+            r: Some(rule.clone()),
+            ..Default::default()
+        });
+        loop_exits(spec, follow);
+    });
+}
+
+/// `*A` over a rule item: one continue per FIRST token of the item,
+/// each peeking it and replacing with the iteration `H$alt0`, which
+/// pushes the item and, on close, replaces with `H$alt0$step1`, which
+/// replaces with `H`.
+fn ref_loop(parser: &mut Tabnas, name: &str, firsts: &[Tin], item: &str, follow: Tin) {
+    let rule = name.to_string();
+    let iteration = format!("{name}$alt0");
+    let step = format!("{iteration}$step1");
+    let firsts = firsts.to_vec();
+    let iteration_for_loop = iteration.clone();
+    parser.define_rule(name, move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry(&rule));
+        for first in firsts {
+            spec.add_open(AltSpec {
+                s: vec![vec![first]],
+                b: 1,
+                r: Some(iteration_for_loop.clone()),
+                ..Default::default()
+            });
+        }
+        loop_exits(spec, follow);
+    });
+    let item = item.to_string();
+    let step_for_iteration = step.clone();
+    parser.define_rule(iteration, move |spec| {
+        spec.clear();
+        spec.add_open(counted(
+            AltSpec {
+                p: Some(item),
+                ..Default::default()
+            },
+            0,
+        ));
+        spec.add_close(counted(
+            AltSpec {
+                r: Some(step_for_iteration),
+                ..Default::default()
+            },
+            1,
+        ));
+    });
+    let rule = name.to_string();
+    parser.define_rule(step, move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            r: Some(rule),
+            ..Default::default()
+        });
+    });
+}
+
+/// A rule of one open alternative and an empty close.
+fn simple_rule(parser: &mut Tabnas, name: &str, open: AltSpec, close: Option<AltSpec>) {
+    parser.define_rule(name, move |spec| {
+        spec.clear();
+        spec.add_open(open);
+        if let Some(close) = close {
+            spec.add_close(close);
+        }
+    });
+}
+
+/// The compiler's `[ X ]` over a rule: take it when its FIRST token is
+/// next (peek, then the pushed rule consumes it), skip it on a FOLLOW
+/// token or on anything else.
+fn optional_of(parser: &mut Tabnas, name: &str, first: Tin, item: &str, follows: &[Tin]) {
+    let item = item.to_string();
+    let follows = follows.to_vec();
+    parser.define_rule(name, move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![first]],
+            b: 1,
+            p: Some(item),
+            ..Default::default()
+        });
+        for follow in follows {
+            spec.add_open(AltSpec {
+                s: vec![vec![follow]],
+                b: 1,
+                ..Default::default()
+            });
+        }
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec::new());
+    });
+}
+
+/// `[ "x" ]` as the compiler builds it: a group holding the token, and
+/// the optional over the group, named after it. Returns the optional's
+/// name, `_gen<index+1>_opt__gen<index>_group`.
+fn optional_group(parser: &mut Tabnas, index: u32, item: Tin, follows: &[Tin]) -> String {
+    let group = format!("_gen{index}_group");
+    let opt = format!("_gen{}_opt_{group}", index + 1);
+    simple_rule(
+        parser,
+        &group,
+        AltSpec {
+            s: vec![vec![item]],
+            ..Default::default()
+        },
+        None,
+    );
+    optional_of(parser, &opt, item, &group, follows);
+    opt
+}
+
+/// The compiler's `1*X` over a rule item: the helper pushes the item
+/// and, on close, replaces with a step that pushes the star of the item.
+fn plus_chain(parser: &mut Tabnas, name: &str, item: &str, star: &str) {
+    let step = format!("{name}$step1");
+    simple_rule(
+        parser,
+        name,
+        AltSpec {
+            p: Some(item.into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some(step.clone()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        parser,
+        &step,
+        AltSpec {
+            p: Some(star.into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+}
+
+/// The text a loop test pins, plus the two RFC 5234 shapes and the
+/// absence of any leaked synthetic: neither `_gen` / `r-gen` nor the
+/// `$alt` / `-alt` of an iteration helper may reach the output.
+fn assert_loop_abnf(out: &str, want: &str) {
+    assert_eq!(
+        out, want,
+        "loop rendering mismatch:\n--- got ---\n{out}\n--- want ---\n{want}"
+    );
+    for leak in ["_gen", "r-gen", "$", "-alt", "step1"] {
+        assert!(!out.contains(leak), "a synthetic {leak:?} leaked:\n{out}");
+    }
+    assert_rfc5234_shape(out);
+}
+
+/// `rep = *"a"`: a terminal item. This is THE defect shape: with the
+/// entry counted as an alternative the loop rendered as
+/// `r-gen1-star-term = [ r-gen1-star-term / A ]`, a production that
+/// names itself and, recompiled, accepts less than the original.
+#[test]
+fn abnf_renders_a_terminal_loop_as_a_star() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "rep",
+        AltSpec {
+            p: Some("_gen1_star_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    terminal_loop(&mut parser, "_gen1_star_term", a, end);
+    wrap_start(&mut parser, "rep");
+
+    assert_loop_abnf(&abnf(&parser), "rep = *A\n\nA = %s\"a\"");
+}
+
+/// `rep = 1*"a"`: the `_plus` helper is `A` followed by the star of `A`.
+/// With the star a loop the helper folds, and is written back as the
+/// `1*A` it was compiled from — not the `A *A` it is element by element.
+/// The two recognise the same language, but the abnf crate does not
+/// compile them to the same recogniser: where the item is nullable
+/// (`1*( [ "+" "e" ] )`) or its FIRST meets its FOLLOW (`1*item` with
+/// `item = "]" "e" / [ "d" ]`), the recompiled `A *A` rejected `+e` and
+/// `]e`, which the original accepts. This pinned `rep = A *A` until that
+/// round trip failed. (With an old-shape star the helper stays a
+/// production, as it always did: see
+/// `abnf_keeps_an_old_shape_plus_production`.)
+#[test]
+fn abnf_renders_a_plus_over_a_loop_as_one_or_more() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "rep",
+        AltSpec {
+            p: Some("_gen1_plus_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    terminal_loop(&mut parser, "_gen1_star_term", a, end);
+    simple_rule(
+        &mut parser,
+        "_gen1_plus_term",
+        AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen1_star_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    wrap_start(&mut parser, "rep");
+
+    assert_loop_abnf(&abnf(&parser), "rep = 1*A\n\nA = %s\"a\"");
+}
+
+/// `doc = *item` with `item = "x" "y"`: a rule item, so the loop goes
+/// through the iteration helpers. `item` keeps its production; `H$alt0`
+/// and `H$alt0$step1` do not get one, and their back edges render
+/// nothing. The helpers are installed BEFORE the loop, as the compiler
+/// installs them, so a production order that merely followed insertion
+/// would have leaked them first.
+#[test]
+fn abnf_renders_a_ref_loop_as_a_star_of_the_rule() {
+    let mut parser = Tabnas::new();
+    let x = parser.token_with_source("#X", "x");
+    let y = parser.token_with_source("#Y", "y");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "doc",
+        AltSpec {
+            p: Some("_gen1_star_item".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![x], vec![y]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(&mut parser, "_gen1_star_item", &[x], "item", end);
+    wrap_start(&mut parser, "doc");
+
+    assert_loop_abnf(
+        &abnf(&parser),
+        "doc = *item\nitem = X Y\n\nX = %s\"x\"\nY = %s\"y\"",
+    );
+}
+
+/// `list = "[" *( "," item ) "]"` with `item = "x"`: a loop inside a
+/// sequence, over a group. The group folds into the iteration, the
+/// loop's FOLLOW is the closing bracket (peeked by the exit, never
+/// rendered), and the `"]"` comes from `list`'s own chain step.
+#[test]
+fn abnf_renders_a_group_loop_inside_a_sequence() {
+    let mut parser = Tabnas::new();
+    let open = parser.token_with_source("#T", "[");
+    let close = parser.token_with_source("#T1", "]");
+    let comma = parser.token_with_source("#T2", ",");
+    let x = parser.token_with_source("#X", "x");
+    simple_rule(
+        &mut parser,
+        "list",
+        AltSpec {
+            s: vec![vec![open]],
+            p: Some("_gen2_star__gen1_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("list$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        &mut parser,
+        "list$step1",
+        AltSpec {
+            s: vec![vec![close]],
+            ..Default::default()
+        },
+        None,
+    );
+    simple_rule(
+        &mut parser,
+        "_gen1_group",
+        AltSpec {
+            s: vec![vec![comma]],
+            p: Some("item".into()),
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(
+        &mut parser,
+        "_gen2_star__gen1_group",
+        &[comma],
+        "_gen1_group",
+        close,
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![x]],
+            ..Default::default()
+        },
+        None,
+    );
+    wrap_start(&mut parser, "list");
+
+    assert_loop_abnf(
+        &abnf(&parser),
+        "list = T *( T2 item ) T1\nitem = X\n\nT  = \"[\"\nT2 = \",\"\nT1 = \"]\"\nX  = %s\"x\"",
+    );
+}
+
+/// `s = *( "a" / "b" ) ";"`: a loop over a two-way group has one
+/// continue per FIRST token, both replacing with the same iteration. The
+/// iteration renders once, as the parenthesised alternation, and the
+/// repetition wraps it exactly once: `*( A / B )`, not `*( ( A / B ) )`.
+#[test]
+fn abnf_renders_a_loop_over_alternatives_once() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let semi = parser.token_with_source("#T", ";");
+    simple_rule(
+        &mut parser,
+        "s",
+        AltSpec {
+            p: Some("_gen2_star__gen1_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("s$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        &mut parser,
+        "s$step1",
+        AltSpec {
+            s: vec![vec![semi]],
+            ..Default::default()
+        },
+        None,
+    );
+    parser.define_rule("_gen1_group", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            ..Default::default()
+        });
+        spec.add_open(AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        });
+    });
+    ref_loop(
+        &mut parser,
+        "_gen2_star__gen1_group",
+        &[a, b],
+        "_gen1_group",
+        semi,
+    );
+    wrap_start(&mut parser, "s");
+
+    assert_loop_abnf(
+        &abnf(&parser),
+        "s = *( A / B ) T\n\nA = %s\"a\"\nB = %s\"b\"\nT = \";\"",
+    );
+}
+
+/// `outer = *( "<" *"i" ">" )`: a loop nested in a loop's iteration. The
+/// inner loop is a loop of its own, rendered as `*I` inside the outer
+/// iteration; the outer's exit peeks `#ZZ`, the inner's peeks `">"`.
+#[test]
+fn abnf_renders_a_loop_nested_in_a_loop() {
+    let mut parser = Tabnas::new();
+    let lt = parser.token_with_source("#T", "<");
+    let gt = parser.token_with_source("#T1", ">");
+    let i = parser.token_with_source("#I", "i");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "outer",
+        AltSpec {
+            p: Some("_gen3_star__gen2_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    terminal_loop(&mut parser, "_gen1_star_term", i, gt);
+    simple_rule(
+        &mut parser,
+        "_gen2_group",
+        AltSpec {
+            s: vec![vec![lt]],
+            p: Some("_gen1_star_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("_gen2_group$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        &mut parser,
+        "_gen2_group$step1",
+        AltSpec {
+            s: vec![vec![gt]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_group",
+        &[lt],
+        "_gen2_group",
+        end,
+    );
+    wrap_start(&mut parser, "outer");
+
+    assert_loop_abnf(
+        &abnf(&parser),
+        "outer = *( T *I T1 )\n\nT  = \"<\"\nI  = %s\"i\"\nT1 = \">\"",
+    );
+}
+
+/// `rep = 2*"a"`: a counted repetition compiles to a `_rep` helper, the
+/// item `n` times then the star of the item, in one alternative for a
+/// terminal item. It is written back as `2*A` for the reason `1*A` is.
+#[test]
+fn abnf_renders_a_counted_repetition_over_a_loop_with_its_count() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "rep",
+        AltSpec {
+            p: Some("_gen1_rep_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    terminal_loop(&mut parser, "_gen1_star_term", a, end);
+    simple_rule(
+        &mut parser,
+        "_gen1_rep_term",
+        AltSpec {
+            s: vec![vec![a], vec![a]],
+            p: Some("_gen1_star_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    wrap_start(&mut parser, "rep");
+
+    assert_loop_abnf(&abnf(&parser), "rep = 2*A\n\nA = %s\"a\"");
+}
+
+/// `n = 2*4"z"`: a bounded repetition compiles to a `_rep` helper too,
+/// but one that ends in nested optionals rather than a loop. Its body is
+/// not an item then a repetition, so it renders as it is; the count
+/// rewrite must not reach for a `_rep` name alone.
+#[test]
+fn abnf_leaves_a_bounded_repetition_as_its_optionals() {
+    let mut parser = Tabnas::new();
+    let z = parser.token_with_source("#Z", "z");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "n",
+        AltSpec {
+            p: Some("_gen1_rep_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    let inner = optional_group(&mut parser, 1, z, &[end]);
+    simple_rule(
+        &mut parser,
+        "_gen3_group",
+        AltSpec {
+            s: vec![vec![z]],
+            p: Some(inner),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    optional_of(
+        &mut parser,
+        "_gen4_opt__gen3_group",
+        z,
+        "_gen3_group",
+        &[end],
+    );
+    simple_rule(
+        &mut parser,
+        "_gen1_rep_term",
+        AltSpec {
+            s: vec![vec![z], vec![z]],
+            p: Some("_gen4_opt__gen3_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    wrap_start(&mut parser, "n");
+
+    assert_loop_abnf(&abnf(&parser), "n = Z Z [ Z [ Z ] ]\n\nZ = %s\"z\"");
+}
+
+/// `top = *[ "," ]`: a loop over an optional. The star's helper is named
+/// after its item, `_gen3_star__gen2_opt__gen1_group`, and so are its
+/// iteration helpers, and deciding the `[ … ]` wrap by a substring test
+/// for `_opt` reached all three: the option was wrapped again, and the
+/// step, whose only content is the back edge, became the empty option in
+/// `*[ [ T ] [  ] ]`. RFC 5234 has no room for it: an option holds an
+/// alternation, and an alternation at least one concatenation. Read from
+/// the rule's own segment, only the optional's helper is an optional.
+/// (The optional's exits peek the item's own token as well as the end:
+/// inside a loop, the item is its own FOLLOW.)
+#[test]
+fn abnf_renders_a_loop_over_an_optional_without_an_empty_option() {
+    let mut parser = Tabnas::new();
+    let comma = parser.token_with_source("#T", ",");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star__gen2_opt__gen1_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    let opt = optional_group(&mut parser, 1, comma, &[comma, end]);
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_opt__gen1_group",
+        &[comma],
+        &opt,
+        end,
+    );
+    wrap_start(&mut parser, "top");
+
+    let out = abnf(&parser);
+    assert!(!has_empty_option(&out), "an empty `[ ]` option in:\n{out}");
+    assert_loop_abnf(&out, "top = *[ T ]\n\nT = \",\"");
+}
+
+/// `top = 1*[ "a" ]`: the `_plus` helper over an optional is named after
+/// it too (`_gen3_plus__gen2_opt__gen1_group`), as is its chain step. The
+/// same substring test rendered `[ [ A ] [ *[ [ A ] [  ] ] ] ]`; the
+/// helper is a plus, its step a step, and the whole is the `1*[ A ]` it
+/// came from.
+#[test]
+fn abnf_renders_a_plus_over_an_optional_loop_as_one_or_more() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_plus__gen2_opt__gen1_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    let opt = optional_group(&mut parser, 1, a, &[a, end]);
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_opt__gen1_group",
+        &[a],
+        &opt,
+        end,
+    );
+    plus_chain(
+        &mut parser,
+        "_gen3_plus__gen2_opt__gen1_group",
+        &opt,
+        "_gen3_star__gen2_opt__gen1_group",
+    );
+    wrap_start(&mut parser, "top");
+
+    let out = abnf(&parser);
+    assert!(!has_empty_option(&out), "an empty `[ ]` option in:\n{out}");
+    assert_loop_abnf(&out, "top = 1*[ A ]\n\nA = %s\"a\"");
+}
+
+/// `top = 1*( "a" "b" )` and `top = 1*( "a" / "b" )`: a plus over a
+/// group. The loop writes the sequence as `*( A B )` and the alternation,
+/// already one parenthesised element, as `*( A / B )`; the plus is the
+/// item as the loop wrote it, once, then the loop, in either spelling,
+/// and comes back as `1*( A B )` and `1*( A / B )`.
+#[test]
+fn abnf_renders_a_plus_over_a_group_loop_as_one_or_more() {
+    for (alternation, want) in [
+        (false, "top = 1*( A B )\n\nA = %s\"a\"\nB = %s\"b\""),
+        (true, "top = 1*( A / B )\n\nA = %s\"a\"\nB = %s\"b\""),
+    ] {
+        let mut parser = Tabnas::new();
+        let a = parser.token_with_source("#A", "a");
+        let b = parser.token_with_source("#B", "b");
+        let end = token(&parser, "#ZZ");
+        simple_rule(
+            &mut parser,
+            "top",
+            AltSpec {
+                p: Some("_gen2_plus__gen1_group".into()),
+                ..Default::default()
+            },
+            Some(AltSpec::new()),
+        );
+        parser.define_rule("_gen1_group", move |spec| {
+            spec.clear();
+            if alternation {
+                spec.add_open(AltSpec {
+                    s: vec![vec![a]],
+                    ..Default::default()
+                });
+                spec.add_open(AltSpec {
+                    s: vec![vec![b]],
+                    ..Default::default()
+                });
+            } else {
+                spec.add_open(AltSpec {
+                    s: vec![vec![a], vec![b]],
+                    ..Default::default()
+                });
+            }
+        });
+        let firsts: &[Tin] = if alternation { &[a, b] } else { &[a] };
+        ref_loop(
+            &mut parser,
+            "_gen2_star__gen1_group",
+            firsts,
+            "_gen1_group",
+            end,
+        );
+        plus_chain(
+            &mut parser,
+            "_gen2_plus__gen1_group",
+            "_gen1_group",
+            "_gen2_star__gen1_group",
+        );
+        wrap_start(&mut parser, "top");
+
+        assert_loop_abnf(&abnf(&parser), want);
+    }
+}
+
+/// Design point 4: a grammar in the OLD shape renders exactly as before.
+/// `1*"a"` compiled to a `_plus` helper pushing a push-chain star; the
+/// star is a kept production, so the helper stays one too, and the output
+/// is what the emitter gave before the loop shape existed: the productions
+/// in installation order (the compiler installs the star before the plus),
+/// the star's empty alternative as `[ … ]`.
+#[test]
+fn abnf_keeps_an_old_shape_plus_production() {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "rep".into();
+    let a = parser.token_with_source("#A", "a");
+    simple_rule(
+        &mut parser,
+        "rep",
+        AltSpec {
+            p: Some("_gen1_plus_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        // The push chain: each item pushes the rule again.
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec::new());
+    });
+    simple_rule(
+        &mut parser,
+        "_gen1_plus_A",
+        AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out,
+        "rep = r-gen1-plus-A\nr-gen1-star-A = [ A r-gen1-star-A ]\nr-gen1-plus-A = A r-gen1-star-A\n\nA = %s\"a\"",
+        "old-shape plus mismatch:\n{out}"
+    );
+    assert_rfc5234_shape(&out);
+}
+
+/// A user rule with a non-consuming self-replace open alternative that is
+/// NOT a loop entry: a guarded or counted state transition, such as
+/// `{ c: [n.mode == 0], n: {mode: 1}, r: st }`. Its `s`, `b`, `p` and
+/// `r` are the entry's, and it is no repetition: the entry's own guard
+/// `n.rep == 0` and its counter set to 1 are part of the shape, and each
+/// is tried without the other here too. Read as a loop, the whole rule
+/// was rewritten as `st = *( A / B )`, accepting the empty input and any
+/// number of items where the original takes one. It renders as the
+/// emitter always rendered it, a reference to the rule among its
+/// alternatives (`st = st / A / B` is what origin/main emits), and never
+/// as `*…`.
+#[test]
+fn abnf_does_not_read_an_unguarded_self_replace_as_a_loop() {
+    let guard = |name: &str, value: f64| Condition {
+        path: vec!["n".into(), name.into()],
+        op: CompareOp::Eq,
+        value: Value::Number(value),
+    };
+    let transitions = [
+        // Another counter's transition.
+        AltSpec {
+            c: vec![guard("mode", 0.0)],
+            n: HashMap::from([("mode".to_string(), 1)]),
+            r: Some("st".into()),
+            ..Default::default()
+        },
+        // The bare self-replace.
+        AltSpec {
+            r: Some("st".into()),
+            ..Default::default()
+        },
+        // The guard without the counter.
+        AltSpec {
+            c: vec![guard("rep", 0.0)],
+            r: Some("st".into()),
+            ..Default::default()
+        },
+        // The counter without the guard.
+        counted(
+            AltSpec {
+                r: Some("st".into()),
+                ..Default::default()
+            },
+            1,
+        ),
+    ];
+    for transition in transitions {
+        let mut parser = Tabnas::new();
+        parser.options.rule.start = "st".into();
+        let a = parser.token_with_source("#A", "a");
+        let b = parser.token_with_source("#B", "b");
+        parser.define_rule("st", move |spec| {
+            spec.clear();
+            spec.add_open(transition);
+            spec.add_open(AltSpec {
+                s: vec![vec![a]],
+                ..Default::default()
+            });
+            spec.add_open(AltSpec {
+                s: vec![vec![b]],
+                ..Default::default()
+            });
+            spec.add_close(AltSpec::new());
+        });
+
+        let out = abnf(&parser);
+        assert_eq!(
+            out, "st = st / A / B\n\nA = %s\"a\"\nB = %s\"b\"",
+            "a self-replace that is not the loop entry:\n{out}"
+        );
+        assert!(!out.contains('*'), "read as a repetition:\n{out}");
+        assert_rfc5234_shape(&out);
+    }
+}
+
+/// `one = A [ one ]`, hand-built as a guarded close continuation: the
+/// open consumes `A`, and the closes are `{ s: A, b: 1, r: one }`, which
+/// peeks the next `A` and re-enters the rule, and `{ }`. The continuation
+/// replaces with the rule being rendered and is not its loop entry (a
+/// close, and unguarded), so it keeps its content. Calling it empty for
+/// the self-replace alone skipped it and emitted `one = A`: exactly one
+/// where the rule takes one or more. origin/main emits the pinned text.
+#[test]
+fn abnf_keeps_a_guarded_self_replacing_close_continuation() {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "one".into();
+    let a = parser.token_with_source("#A", "a");
+    parser.define_rule("one", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            ..Default::default()
+        });
+        spec.add_close(AltSpec {
+            s: vec![vec![a]],
+            b: 1,
+            r: Some("one".into()),
+            ..Default::default()
+        });
+        spec.add_close(AltSpec::new());
+    });
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out, "one = A [ one ]\n\nA = %s\"a\"",
+        "one-or-more continuation mismatch:\n{out}"
+    );
+    assert_rfc5234_shape(&out);
+}
+
+/// The open alternatives of a rule, over the tokens `A` and `B`.
+type Opens = fn(Tin, Tin) -> Vec<AltSpec>;
+
+/// A rule of the given open alternatives, named `once` and started
+/// from, with no close.
+fn rule_of_opens(opens: Opens) -> String {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "once".into();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    parser.define_rule("once", move |spec| {
+        spec.clear();
+        for alt in opens(a, b) {
+            spec.add_open(alt);
+        }
+    });
+    abnf(&parser)
+}
+
+/// The entry alone does not make a loop: the whole scaffold does, the
+/// entry first, continues that each come back to the rule having taken
+/// something, and an exit that shadows none of them. Each rule
+/// here has the entry and not the rest, and none of them repeats
+/// anything:
+///
+/// - the continue `{ s: A }` never comes back, so with the exit the rule
+///   takes one `A` or nothing;
+/// - `{ s: A, r: once }` comes back and `{ s: B }` does not, so a `B`
+///   ends the rule;
+/// - the continue comes back and there is no exit, so the rule never
+///   stops;
+/// - the continue pushes as well as replacing, and the engine takes the
+///   push and not the replace;
+/// - the continue only peeks and comes back, taking nothing;
+/// - the empty exit `{ }` comes before the continue, which it shadows;
+/// - the entry comes after a continue, not first as the compiler puts
+///   it;
+/// - an empty exit with a condition comes before the continue, which it
+///   shadows whenever the condition holds;
+/// - a function decides the entry's route;
+/// - a second entry follows the continue, with an exit after it or
+///   none: the compiler writes one, and a second is neither a continue
+///   nor an exit;
+/// - the only exit carries a condition, which may never hold, and the
+///   compiler never guards an exit;
+/// - the only exit is a FOLLOW peek, with no empty exit, so the rule
+///   stops only where that token comes next;
+/// - the entry carries a further condition, which may keep it from
+///   setting the counter the continue is guarded on;
+/// - the entry peeks a token, and so sets the counter only where that
+///   token comes next;
+/// - a continue is guarded on `n.rep == 0`, which the entry has already
+///   left behind, and a continue may carry no guard but the compiler's
+///   suffix-debt counter;
+/// - a FOLLOW peek before the only continue covers it, so it never runs;
+/// - a peek covers one continue, whose item no live continue takes, so
+///   rendering it would offer an alternative the rule never takes;
+/// - a continue consumes an empty token slot, which takes any token and
+///   renders as nothing;
+/// - the entry sets a further counter, which turns off a continue
+///   guarded on it;
+/// - a function decides the continue's route.
+///
+/// Read as a loop on its entry alone, all but one rendered as `*A`, which
+/// takes any number, and the one that takes nothing as `once = `, which
+/// RFC 5234 has no room for. Each renders as debug's main emits it, the entry a
+/// reference to the rule among its alternatives, with no repetition. The
+/// whole scaffold, last, still reads as the loop it is.
+#[test]
+fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
+    fn back(tin: Tin) -> AltSpec {
+        AltSpec {
+            s: vec![vec![tin]],
+            r: Some("once".into()),
+            ..Default::default()
+        }
+    }
+    fn take(tin: Tin) -> AltSpec {
+        AltSpec {
+            s: vec![vec![tin]],
+            ..Default::default()
+        }
+    }
+    let cases: [(&str, Opens, &str); 21] = [
+        (
+            "a continue that never comes back",
+            |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
+            "once = [ once / A ]\n\nA = %s\"a\"",
+        ),
+        (
+            "one continue of two that does not come back",
+            |a, b| vec![loop_entry("once"), back(a), take(b), AltSpec::new()],
+            "once = [ once / A once / B ]\n\nA = %s\"a\"\nB = %s\"b\"",
+        ),
+        (
+            "no exit",
+            |a, _| vec![loop_entry("once"), back(a)],
+            "once = once / A once\n\nA = %s\"a\"",
+        ),
+        (
+            "a continue that pushes as well as replacing, which the engine takes as a push",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![a]],
+                        p: Some("once".into()),
+                        r: Some("once".into()),
+                        ..Default::default()
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a continue that only peeks and comes back, taking nothing",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![a]],
+                        b: 1,
+                        r: Some("once".into()),
+                        ..Default::default()
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once ]",
+        ),
+        (
+            "the empty exit before the continue, which it shadows",
+            |a, _| vec![loop_entry("once"), AltSpec::new(), back(a)],
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "the entry after a continue",
+            |a, _| vec![back(a), loop_entry("once"), AltSpec::new()],
+            "once = [ A once / once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an empty exit with a condition before the continue, which shadows it when the condition holds",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "x".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(0.0),
+                        }],
+                        ..Default::default()
+                    },
+                    back(a),
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an entry whose route a function decides",
+            |a, _| {
+                vec![
+                    AltSpec {
+                        r_fn: Some(std::sync::Arc::new(|_, _| None)),
+                        ..loop_entry("once")
+                    },
+                    back(a),
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a second entry after the continue, with no exit",
+            |a, _| vec![loop_entry("once"), back(a), loop_entry("once")],
+            "once = once / A once\n\nA = %s\"a\"",
+        ),
+        (
+            "a second entry after the continue, before the exit",
+            |a, _| vec![loop_entry("once"), back(a), loop_entry("once"), AltSpec::new()],
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an exit under a condition that may never hold",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    back(a),
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "never".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(1.0),
+                        }],
+                        ..Default::default()
+                    },
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a FOLLOW peek and no empty exit",
+            |a, b| {
+                vec![
+                    loop_entry("once"),
+                    back(a),
+                    AltSpec {
+                        s: vec![vec![b]],
+                        b: 1,
+                        ..Default::default()
+                    },
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an entry under a further condition, before a continue guarded on the counter it sets",
+            |a, _| {
+                let mut entry = loop_entry("once");
+                entry.c.push(Condition {
+                    path: vec!["n".into(), "never".into()],
+                    op: CompareOp::Eq,
+                    value: Value::Number(1.0),
+                });
+                vec![
+                    entry,
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "rep".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(1.0),
+                        }],
+                        ..back(a)
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an entry that peeks a token, before a continue guarded on the counter it sets",
+            |a, b| {
+                vec![
+                    AltSpec {
+                        s: vec![vec![b]],
+                        b: 1,
+                        ..loop_entry("once")
+                    },
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "rep".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(1.0),
+                        }],
+                        ..back(a)
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a continue guarded on the state the entry has already left",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "rep".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(0.0),
+                        }],
+                        ..back(a)
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a FOLLOW peek before the only continue, covering it",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![a]],
+                        b: 1,
+                        ..Default::default()
+                    },
+                    back(a),
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an entry that sets a further counter a continue is guarded on",
+            |a, _| {
+                let mut entry = loop_entry("once");
+                entry.n.insert("debt_x".into(), 1);
+                vec![
+                    entry,
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "debt_x".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(0.0),
+                        }],
+                        ..back(a)
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a dead continue with an item no live continue takes",
+            |a, b| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![a]],
+                        b: 1,
+                        ..Default::default()
+                    },
+                    back(a),
+                    back(b),
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once / B once ]\n\nA = %s\"a\"\nB = %s\"b\"",
+        ),
+        (
+            "a continue that consumes an empty token slot",
+            |_, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        s: vec![vec![]],
+                        r: Some("once".into()),
+                        ..Default::default()
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once ]",
+        ),
+        (
+            "a continue whose route a function decides",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    AltSpec {
+                        r_fn: Some(std::sync::Arc::new(|_, _| None)),
+                        ..back(a)
+                    },
+                    AltSpec::new(),
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+    ];
+    for (what, opens, want) in cases {
+        let out = rule_of_opens(opens);
+        assert_eq!(out, want, "{what}:\n{out}");
+        assert!(!out.contains('*'), "{what}, read as a repetition:\n{out}");
+        assert_rfc5234_shape(&out);
+    }
+    let whole = rule_of_opens(|a, _| vec![loop_entry("once"), back(a), AltSpec::new()]);
+    assert_loop_abnf(&whole, "once = *A\n\nA = %s\"a\"");
+}
+
+/// A rule item's loop comes back through its helpers: the continue
+/// replaces with `H$alt0`, which pushes the item and on close replaces
+/// with `H$alt0$step1`, which replaces with `H`. With the step replacing
+/// with nothing, the iteration ends after one item, and the rule is no
+/// loop. It renders as debug's main emits it, with no repetition.
+#[test]
+fn abnf_does_not_read_a_loop_whose_helpers_never_come_back_as_one() {
+    let mut parser = Tabnas::new();
+    let x = parser.token_with_source("#X", "x");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "doc",
+        AltSpec {
+            p: Some("_gen1_star_item".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![x]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(&mut parser, "_gen1_star_item", &[x], "item", end);
+    // The step, which replaced with the loop, now ends the iteration.
+    parser.define_rule("_gen1_star_item$alt0$step1", |spec| {
+        spec.clear();
+        spec.add_open(AltSpec::new());
+    });
+    wrap_start(&mut parser, "doc");
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out,
+        "doc = r-gen1-star-item\nitem = X\n\
+         r-gen1-star-item = [ r-gen1-star-item / r-gen1-star-item-alt0 ]\n\
+         r-gen1-star-item-alt0 = item r-gen1-star-item-alt0-step1\n\
+         r-gen1-star-item-alt0-step1 = \"\"\n\nX = %s\"x\"",
+        "helpers that never come back:\n{out}"
+    );
+    assert!(!out.contains('*'), "read as a repetition:\n{out}");
+    assert_rfc5234_shape(&out);
+}
+
+/// A rule item's loop whose way back is guarded is no loop either: the
+/// step replaces with the loop only under a condition, `n.never == 1`,
+/// which nothing sets, so the iteration can end after one item. The
+/// compiler puts conditions on a loop's own continues, never on its
+/// helpers; a helper's way back is read only when it is taken whatever
+/// the state. It renders as debug's main emits it, with no repetition.
+#[test]
+fn abnf_does_not_read_a_loop_whose_way_back_is_guarded_as_one() {
+    let mut parser = Tabnas::new();
+    let x = parser.token_with_source("#X", "x");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "doc",
+        AltSpec {
+            p: Some("_gen1_star_item".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![x]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(&mut parser, "_gen1_star_item", &[x], "item", end);
+    parser.define_rule("_gen1_star_item$alt0$step1", |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            r: Some("_gen1_star_item".into()),
+            c: vec![Condition {
+                path: vec!["n".into(), "never".into()],
+                op: CompareOp::Eq,
+                value: Value::Number(1.0),
+            }],
+            ..Default::default()
+        });
+    });
+    wrap_start(&mut parser, "doc");
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out,
+        "doc = r-gen1-star-item\nitem = X\n\
+         r-gen1-star-item = [ r-gen1-star-item / r-gen1-star-item-alt0 ]\n\
+         r-gen1-star-item-alt0 = item r-gen1-star-item-alt0-step1\n\
+         r-gen1-star-item-alt0-step1 = r-gen1-star-item\n\nX = %s\"x\"",
+        "a guarded way back:\n{out}"
+    );
+    assert!(!out.contains('*'), "read as a repetition:\n{out}");
+    assert_rfc5234_shape(&out);
+}
+
+/// A `_plus` helper that repeats by a cycle of its own, not through a
+/// loop, keeps its production: here it re-enters itself on `A` and exits
+/// on anything else, which takes any number of `A`. Folded, as a helper
+/// that reaches no kept repetition was, its back edge rendered as
+/// nothing and the rule came out as one `A`. It renders as debug's main
+/// emits it.
+#[test]
+fn abnf_keeps_a_plus_helper_that_repeats_by_its_own_cycle() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    simple_rule(
+        &mut parser,
+        "rep",
+        AltSpec {
+            p: Some("_gen1_plus_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen1_plus_term", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("_gen1_plus_term".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+    });
+    wrap_start(&mut parser, "rep");
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out, "rep = r-gen1-plus-term\nr-gen1-plus-term = [ A r-gen1-plus-term ]\n\nA = %s\"a\"",
+        "a plus helper's own cycle:\n{out}"
+    );
+    assert_rfc5234_shape(&out);
+}
+
+/// `top = *( "b" *"a" "c" )` with the outer star in the loop shape and
+/// the inner star in the OLD push-chain shape, a mix a hand-built grammar
+/// can carry. A loop's helpers are the rules named after it, `H$alt0` and
+/// `H$alt0$step1`, and nothing else it reaches: the foldable group is
+/// inlined on its own account, and the old star, a kept production, stays
+/// a bareword reference inside the repetition, with its production and
+/// its epsilon branch. Finding the helpers by reachability added the old
+/// star to them, suppressed its production and inlined it without its
+/// epsilon branch and back edge: `*( B A C )`, exactly one `A` where the
+/// original takes any number.
+/// A grammar whose start rule is a synthetic loop, named directly or
+/// through the `__start__` wrapper. A synthetic loop is rendered where
+/// it is referenced, and nothing references the start: it came out with
+/// no production at all. The start is always a production.
+#[test]
+fn abnf_keeps_a_synthetic_loop_that_is_the_start_as_a_production() {
+    for wrapped in [false, true] {
+        let mut parser = Tabnas::new();
+        let a = parser.token_with_source("#A", "a");
+        let end = token(&parser, "#ZZ");
+        terminal_loop(&mut parser, "_gen1_star_A", a, end);
+        if wrapped {
+            wrap_start(&mut parser, "_gen1_star_A");
+        } else {
+            parser.options.rule.start = "_gen1_star_A".into();
+        }
+        assert_eq!(
+            abnf(&parser),
+            "r-gen1-star-A = *A\n\nA = %s\"a\"",
+            "wrapped: {wrapped}"
+        );
+    }
+}
+
+/// A synthetic rule with the loop's whole open scaffold whose close
+/// replaces with a synthetic helper, and that helper's route a function
+/// decides: it may come back to the rule by a way the spec does not
+/// show. The rule is no loop, and renders as debug's main emits it.
+#[test]
+fn abnf_does_not_read_a_synthetic_loop_whose_close_helper_is_dynamic_as_one() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen2_group", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![b]],
+            r_fn: Some(std::sync::Arc::new(|_, _| None)),
+            ..Default::default()
+        });
+    });
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry("_gen1_star_A"));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            r: Some("_gen2_group".into()),
+            ..Default::default()
+        });
+    });
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen1-star-A\nr-gen1-star-A = [ r-gen1-star-A / A r-gen1-star-A ] B\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
+/// A synthetic rule with the loop's whole open scaffold whose close
+/// replaces with a synthetic helper that takes a `B` and whose own close
+/// pushes a user rule: the helper runs its closes again each time the
+/// pushed rule ends, pushing `item` over and over. The rule is no loop,
+/// and renders as debug's main emits it.
+#[test]
+fn abnf_does_not_read_a_synthetic_loop_whose_close_helper_pushes_as_one() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let c = parser.token_with_source("#C", "c");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![c]],
+            ..Default::default()
+        },
+        None,
+    );
+    simple_rule(
+        &mut parser,
+        "_gen2_group",
+        AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        },
+        Some(AltSpec {
+            p: Some("item".into()),
+            ..Default::default()
+        }),
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry("_gen1_star_A"));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            r: Some("_gen2_group".into()),
+            ..Default::default()
+        });
+    });
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen1-star-A\nitem = C\nr-gen1-star-A = [ r-gen1-star-A / A r-gen1-star-A ] B item\n\nC = %s\"c\"\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
+/// A loop whose iteration pushes `_gen2_group$alt0`, a synthetic rule
+/// that repeats by a cycle of its own, `A _gen2_group$alt0 / B`, and
+/// comes back to the loop. The cycle is no iteration of the loop's:
+/// read as a helper of the loop, the rule was inlined with its way back
+/// to itself rendered as nothing, `*( A / B )` for a loop that takes
+/// `*( *A B )`. It stays a production of its own, referenced by name.
+#[test]
+fn abnf_keeps_a_cyclic_helper_a_loop_pushes_as_a_production() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star__gen2_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen2_group$alt0", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen2_group$alt0".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        });
+        spec.add_close(AltSpec::new());
+    });
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_group",
+        &[a, b],
+        "_gen2_group$alt0",
+        end,
+    );
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = *r-gen2-group-alt0\nr-gen2-group-alt0 = A r-gen2-group-alt0 / B\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
+/// A synthetic rule with the loop's whole open scaffold and a close
+/// that pushes a user rule. A push in a close comes back to the close
+/// phase when the pushed rule ends and runs the closes again, so the
+/// rule pushes `item` over and over, where the loop inlined as a
+/// repetition rendered `*A item`, one `item`. It is no loop, and renders
+/// as debug's main emits it.
+#[test]
+fn abnf_does_not_read_a_synthetic_loop_whose_close_pushes_as_one() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        },
+        None,
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry("_gen1_star_A"));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            p: Some("item".into()),
+            ..Default::default()
+        });
+    });
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen1-star-A\nitem = B\nr-gen1-star-A = [ r-gen1-star-A / A r-gen1-star-A ] item\n\nB = %s\"b\"\nA = %s\"a\""
+    );
+}
+
+/// A `_plus` over `( B *A C )`, its `*A` in the old push-chain shape,
+/// whose own trailing star is a loop over the same group, as the
+/// compiler builds `1*X`. The old star is the item's, a production
+/// referenced by name, and the plus folds round it as it would round any
+/// rule the item names, written back as the `1*X` it was compiled from.
+#[test]
+fn abnf_folds_a_plus_round_an_old_shape_star_inside_its_item() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let c = parser.token_with_source("#C", "c");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen6_plus__gen2_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec::new());
+    });
+    simple_rule(
+        &mut parser,
+        "_gen2_group",
+        AltSpec {
+            s: vec![vec![b]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("_gen2_group$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        &mut parser,
+        "_gen2_group$step1",
+        AltSpec {
+            s: vec![vec![c]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_group",
+        &[b],
+        "_gen2_group",
+        end,
+    );
+    plus_chain(
+        &mut parser,
+        "_gen6_plus__gen2_group",
+        "_gen2_group",
+        "_gen3_star__gen2_group",
+    );
+    wrap_start(&mut parser, "top");
+
+    assert_eq!(
+        abnf(&parser),
+        "top = 1*( B r-gen1-star-A C )\nr-gen1-star-A = [ A r-gen1-star-A ]\n\nB = %s\"b\"\nC = %s\"c\"\nA = %s\"a\""
+    );
+}
+
+/// A `_plus` helper whose chain pushes `_gen5_group` and ends in a loop
+/// over `_gen2_group`, a different rule that renders the same. The
+/// compiler's `1*X` pushes the very item its loop repeats; this chain
+/// merely reads `X *X`, and `X *X` and `1*X` compile to different
+/// recognisers, so writing it back as `1*X` would claim a construction
+/// it is not. It keeps its production, and its step, as they are.
+#[test]
+fn abnf_keeps_a_plus_over_a_different_item_as_a_production() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let c = parser.token_with_source("#C", "c");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen6_plus__gen5_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec::new());
+    });
+    for group in ["_gen2_group", "_gen5_group"] {
+        let step = format!("{group}$step1");
+        simple_rule(
+            &mut parser,
+            group,
+            AltSpec {
+                s: vec![vec![b]],
+                p: Some("_gen1_star_A".into()),
+                ..Default::default()
+            },
+            Some(AltSpec {
+                r: Some(step.clone()),
+                ..Default::default()
+            }),
+        );
+        simple_rule(
+            &mut parser,
+            &step,
+            AltSpec {
+                s: vec![vec![c]],
+                ..Default::default()
+            },
+            None,
+        );
+    }
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_group",
+        &[b],
+        "_gen2_group",
+        end,
+    );
+    plus_chain(
+        &mut parser,
+        "_gen6_plus__gen5_group",
+        "_gen5_group",
+        "_gen3_star__gen2_group",
+    );
+    wrap_start(&mut parser, "top");
+
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen6-plus--gen5-group\nr-gen1-star-A = [ A r-gen1-star-A ]\nr-gen6-plus--gen5-group = B r-gen1-star-A C r-gen6-plus--gen5-group-step1\nr-gen6-plus--gen5-group-step1 = *( B r-gen1-star-A C )\n\nA = %s\"a\"\nB = %s\"b\"\nC = %s\"c\""
+    );
+}
+
+/// A `_plus` whose chain pushes `item` and ends in a loop whose
+/// iteration pushes `item` and then takes a `B` on its way back. Read as
+/// the plus over a loop it was written `1*( item B )`, which requires
+/// the `B`, where the live chain takes `item` alone. A way back that
+/// takes a token is no iteration helper the compiler writes, so the loop
+/// is no loop, and it and the plus render as debug's main emits them.
+#[test]
+fn abnf_keeps_a_plus_whose_loop_takes_more_than_its_item_as_a_production() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen4_plus_item".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![a]],
+            ..Default::default()
+        },
+        None,
+    );
+    let rule = "_gen3_star_item".to_string();
+    parser.define_rule(rule.clone(), move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry(&rule));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            b: 1,
+            r: Some(format!("{rule}$alt0")),
+            ..Default::default()
+        });
+        loop_exits(spec, end);
+    });
+    parser.define_rule("_gen3_star_item$alt0", |spec| {
+        spec.clear();
+        spec.add_open(counted(
+            AltSpec {
+                p: Some("item".into()),
+                ..Default::default()
+            },
+            0,
+        ));
+        spec.add_close(counted(
+            AltSpec {
+                r: Some("_gen3_star_item$alt0$step1".into()),
+                ..Default::default()
+            },
+            1,
+        ));
+    });
+    parser.define_rule("_gen3_star_item$alt0$step1", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![b]],
+            r: Some("_gen3_star_item".into()),
+            ..Default::default()
+        });
+    });
+    plus_chain(&mut parser, "_gen4_plus_item", "item", "_gen3_star_item");
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen4-plus-item\nitem = A\nr-gen3-star-item = [ r-gen3-star-item / r-gen3-star-item-alt0 ]\nr-gen3-star-item-alt0 = item r-gen3-star-item-alt0-step1\nr-gen3-star-item-alt0-step1 = B r-gen3-star-item\nr-gen4-plus-item = item r-gen4-plus-item-step1\nr-gen4-plus-item-step1 = r-gen3-star-item\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
+/// A loop whose continue replaces with a helper of a shape the compiler
+/// never writes: one that pushes the loop itself, and one with an empty
+/// way through beside a consuming one. The first rendered the pushed
+/// loop as the iteration's back edge, nothing at all; the second dropped
+/// the empty way, `*( A B )` for a rule that also takes `A` alone.
+/// Neither is a loop, and each renders as debug's main emits it.
+#[test]
+fn abnf_does_not_read_a_loop_through_a_helper_of_another_shape_as_one() {
+    type Helper = fn(Tin) -> Vec<AltSpec>;
+    let helpers: [(&str, Helper, &str); 2] = [
+        (
+            "pushes the loop",
+            |_| {
+                vec![AltSpec {
+                    p: Some("_gen1_star_x".into()),
+                    ..Default::default()
+                }]
+            },
+            "top = r-gen1-star-x\nr-gen1-star-x = [ r-gen1-star-x / A r-gen1-star-x-alt0 ]\nr-gen1-star-x-alt0 = r-gen1-star-x r-gen1-star-x-alt0-step1\nr-gen1-star-x-alt0-step1 = r-gen1-star-x\n\nA = %s\"a\"",
+        ),
+        (
+            "an empty way beside a consuming one",
+            |b| {
+                vec![
+                    AltSpec::new(),
+                    AltSpec {
+                        s: vec![vec![b]],
+                        ..Default::default()
+                    },
+                ]
+            },
+            "top = r-gen1-star-x\nr-gen1-star-x = [ r-gen1-star-x / A r-gen1-star-x-alt0 ]\nr-gen1-star-x-alt0 = [ B ] r-gen1-star-x-alt0-step1\nr-gen1-star-x-alt0-step1 = r-gen1-star-x\n\nA = %s\"a\"\nB = %s\"b\"",
+        ),
+    ];
+    for (what, opens, want) in helpers {
+        let mut parser = Tabnas::new();
+        let a = parser.token_with_source("#A", "a");
+        let b = parser.token_with_source("#B", "b");
+        let end = token(&parser, "#ZZ");
+        simple_rule(
+            &mut parser,
+            "top",
+            AltSpec {
+                p: Some("_gen1_star_x".into()),
+                ..Default::default()
+            },
+            Some(AltSpec::new()),
+        );
+        parser.define_rule("_gen1_star_x", move |spec| {
+            spec.clear();
+            spec.add_open(loop_entry("_gen1_star_x"));
+            spec.add_open(AltSpec {
+                s: vec![vec![a]],
+                r: Some("_gen1_star_x$alt0".into()),
+                ..Default::default()
+            });
+            loop_exits(spec, end);
+        });
+        parser.define_rule("_gen1_star_x$alt0", move |spec| {
+            spec.clear();
+            for alt in opens(b) {
+                spec.add_open(alt);
+            }
+            spec.add_close(AltSpec {
+                r: Some("_gen1_star_x$alt0$step1".into()),
+                ..Default::default()
+            });
+        });
+        simple_rule(
+            &mut parser,
+            "_gen1_star_x$alt0$step1",
+            AltSpec {
+                r: Some("_gen1_star_x".into()),
+                ..Default::default()
+            },
+            None,
+        );
+        wrap_start(&mut parser, "top");
+        assert_eq!(abnf(&parser), want, "{what}");
+    }
+}
+
+/// A loop whose item is `_gen2_group$alt0`, a `$alt` rule that takes an
+/// `A` or nothing and then a `B`: the iteration takes `A B` or `B`.
+/// Inlined as a helper of the loop its empty way was dropped, `*( A B )`;
+/// nothing but a loop's inlining would inline a `$alt` rule, and one
+/// with an empty way stays a production of its own, as it always was.
+#[test]
+fn abnf_keeps_a_nullable_helper_inside_a_loop_as_a_production() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star_x".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen2_group$alt0", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        });
+    });
+    ref_loop(
+        &mut parser,
+        "_gen3_star_x",
+        &[a, b],
+        "_gen2_group$alt0",
+        end,
+    );
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = *r-gen2-group-alt0\nr-gen2-group-alt0 = [ A ] B\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
+/// A user loop over `*A` whose close phase takes a `B` and replaces the
+/// rule with itself, or ends: `H = *A [ B H ]`. The iteration's own back
+/// edges render as nothing, but the close's `r: H` is the rule again,
+/// and dropping it rendered `H = *A [ B ]`, which stops after one `B`.
+#[test]
+fn abnf_keeps_a_loops_close_that_re_enters_it() {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "once".into();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    parser.define_rule("once", move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry("once"));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("once".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            s: vec![vec![b]],
+            r: Some("once".into()),
+            ..Default::default()
+        });
+        spec.add_close(AltSpec::new());
+    });
+    assert_eq!(
+        abnf(&parser),
+        "once = *A [ B once ]\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
+/// The same scaffold on a synthetic rule, which is inlined where it is
+/// referenced and has no production of its own to name from its close:
+/// it is no loop, and renders as debug's main emits it, a production.
+#[test]
+fn abnf_does_not_read_a_synthetic_loop_whose_close_re_enters_it_as_one() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry("_gen1_star_A"));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            s: vec![vec![b]],
+            r: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_close(AltSpec::new());
+    });
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen1-star-A\nr-gen1-star-A = [ r-gen1-star-A / A r-gen1-star-A ] [ B r-gen1-star-A ]\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
+#[test]
+fn abnf_keeps_an_old_shape_star_inside_a_loop_group() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let c = parser.token_with_source("#C", "c");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star__gen2_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        // The push chain: each item pushes the rule again.
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec::new());
+    });
+    simple_rule(
+        &mut parser,
+        "_gen2_group",
+        AltSpec {
+            s: vec![vec![b]],
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("_gen2_group$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        &mut parser,
+        "_gen2_group$step1",
+        AltSpec {
+            s: vec![vec![c]],
+            ..Default::default()
+        },
+        None,
+    );
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_group",
+        &[b],
+        "_gen2_group",
+        end,
+    );
+    wrap_start(&mut parser, "top");
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out,
+        "top = *( B r-gen1-star-A C )\nr-gen1-star-A = [ A r-gen1-star-A ]\n\nB = %s\"b\"\nC = %s\"c\"\nA = %s\"a\"",
+        "old-shape star inside a loop mismatch:\n{out}"
+    );
+    for leak in ["_gen", "$", "-alt", "step1"] {
+        assert!(!out.contains(leak), "a synthetic {leak:?} leaked:\n{out}");
+    }
+    assert_rfc5234_shape(&out);
+}
+
+/// `( *"a" "b" / "c" )` as the compiler builds it under a repetition:
+/// a group whose first alternative starts with a rule gets a `$alt` /
+/// `$step` chain of its own — `_gen2_group$alt0` pushes the inner star
+/// and closes into `_gen2_group$alt0$step1`, which takes the `"b"`;
+/// `_gen2_group$alt1` takes the `"c"`; the group peeks each FIRST token
+/// and pushes the chain that starts with it. The inner star is a terminal
+/// loop whose FOLLOW is the `"b"`; the outer star, `_gen3_star__gen2_group`,
+/// is a ref loop over the group with one continue per FIRST token and the
+/// `"d"` after it as its FOLLOW. Installed in the compiler's order, from
+/// the specs it emits for `top = *( *%s"a" %s"b" / %s"c" ) %s"d"`.
+fn star_of_a_group_with_a_star_alternative(parser: &mut Tabnas, a: Tin, b: Tin, c: Tin, d: Tin) {
+    terminal_loop(parser, "_gen1_star_term", a, b);
+    simple_rule(
+        parser,
+        "_gen2_group$alt0",
+        AltSpec {
+            p: Some("_gen1_star_term".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("_gen2_group$alt0$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        parser,
+        "_gen2_group$alt0$step1",
+        AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        },
+        None,
+    );
+    simple_rule(
+        parser,
+        "_gen2_group$alt1",
+        AltSpec {
+            s: vec![vec![c]],
+            ..Default::default()
+        },
+        None,
+    );
+    parser.define_rule("_gen2_group", move |spec| {
+        spec.clear();
+        for (first, chain) in [
+            (a, "_gen2_group$alt0"),
+            (b, "_gen2_group$alt0"),
+            (c, "_gen2_group$alt1"),
+        ] {
+            spec.add_open(AltSpec {
+                s: vec![vec![first]],
+                b: 1,
+                p: Some(chain.into()),
+                ..Default::default()
+            });
+        }
+        spec.add_close(AltSpec::new());
+    });
+    ref_loop(
+        parser,
+        "_gen3_star__gen2_group",
+        &[a, b, c],
+        "_gen2_group",
+        d,
+    );
+}
+
+/// `top = *( *"a" "b" / "c" ) "d"`: a loop over a group that has a
+/// `$alt` / `$step` chain of its own, because one of its alternatives
+/// starts with a rule. That chain is the loop's to inline, like the
+/// group and the loop's own `H$alt0` and `H$alt0$step1`: the helpers of
+/// a loop are everything its iteration reaches short of a kept
+/// production. Finding them by name (`H$…`) missed the group's chain,
+/// which `is_foldable` refuses for its `$alt`, and it surfaced as three
+/// kept productions, `top = *( r-gen2-group-alt0 / r-gen2-group-alt1 ) D`
+/// with `r-gen2-group-alt0 = *A r-gen2-group-alt0-step1`. The inner loop
+/// renders as `*A` inside the alternative.
+#[test]
+fn abnf_renders_a_loop_over_a_group_with_a_star_alternative() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let c = parser.token_with_source("#C", "c");
+    let d = parser.token_with_source("#D", "d");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star__gen2_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("top$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        &mut parser,
+        "top$step1",
+        AltSpec {
+            s: vec![vec![d]],
+            ..Default::default()
+        },
+        None,
+    );
+    star_of_a_group_with_a_star_alternative(&mut parser, a, b, c, d);
+    wrap_start(&mut parser, "top");
+
+    assert_loop_abnf(
+        &abnf(&parser),
+        "top = *( *A B / C ) D\n\nA = %s\"a\"\nB = %s\"b\"\nC = %s\"c\"\nD = %s\"d\"",
+    );
+}
+
+/// `top = 1*( *"a" "b" / "c" ) "d"`: the `_plus` helper over the same
+/// group pushes it directly and, on close, steps into the loop. The
+/// group's chain folds, so the helper folds too, and is written back as
+/// the `1*( … )` it was compiled from. With the chain refused as kept
+/// productions the helper was refused as well and came out as
+/// `top = r-gen3-plus--gen2-group D` over a body of `X *X`, the spelling
+/// that does not round-trip on a nullable item — and this item is
+/// nullable: `*A B` can start with the `B`.
+#[test]
+fn abnf_renders_a_plus_over_a_group_with_a_star_alternative() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let c = parser.token_with_source("#C", "c");
+    let d = parser.token_with_source("#D", "d");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_plus__gen2_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec {
+            r: Some("top$step1".into()),
+            ..Default::default()
+        }),
+    );
+    simple_rule(
+        &mut parser,
+        "top$step1",
+        AltSpec {
+            s: vec![vec![d]],
+            ..Default::default()
+        },
+        None,
+    );
+    star_of_a_group_with_a_star_alternative(&mut parser, a, b, c, d);
+    plus_chain(
+        &mut parser,
+        "_gen3_plus__gen2_group",
+        "_gen2_group",
+        "_gen3_star__gen2_group",
+    );
+    wrap_start(&mut parser, "top");
+
+    assert_loop_abnf(
+        &abnf(&parser),
+        "top = 1*( *A B / C ) D\n\nA = %s\"a\"\nB = %s\"b\"\nC = %s\"c\"\nD = %s\"d\"",
+    );
+}
+
+/// `odd = A [ odd ]`, hand-built with the close continuation carrying the
+/// loop entry's whole shape: `{ c: [n.rep == 0], n: {rep: 1}, s: A,
+/// b: 1, r: odd }`, then `{ }`. A loop is decided by its OPEN
+/// alternatives, and `odd` has no entry among them, so it is no loop, and
+/// a rule that is not a loop has no entry to skip: every alternative is
+/// content. Skipping the entry's shape wherever it appeared emitted
+/// `odd = A`, exactly one where the rule takes one or more. origin/main
+/// emits the pinned text.
+#[test]
+fn abnf_keeps_an_entry_shaped_close_continuation_of_a_rule_that_is_no_loop() {
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "odd".into();
+    let a = parser.token_with_source("#A", "a");
+    parser.define_rule("odd", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            ..Default::default()
+        });
+        spec.add_close(AltSpec {
+            s: vec![vec![a]],
+            b: 1,
+            ..loop_entry("odd")
+        });
+        spec.add_close(AltSpec::new());
+    });
+
+    let out = abnf(&parser);
+    assert_eq!(
+        out, "odd = A [ odd ]\n\nA = %s\"a\"",
+        "entry-shaped continuation of a non-loop mismatch:\n{out}"
+    );
+    assert!(!out.contains('*'), "read as a repetition:\n{out}");
+    assert_rfc5234_shape(&out);
 }
