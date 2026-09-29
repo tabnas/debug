@@ -123,7 +123,7 @@ matters when you are chasing a discrepancy:
   `go test` (workspace on) resolves the sibling instead. Both currently
   pass; see [`go/AGENTS.md`](go/AGENTS.md) for why that gap has bitten
   before.
-- Rust: `rs/Cargo.toml` declares `tabnas = { path = "../../parser/rs" }`.
+- Rust: `rs/Cargo.toml` declares `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }`.
   The crate is not published to any registry, so there is no version to
   fall back on and no second resolution to keep green — Rust always
   tests against sibling `main`, like TypeScript. Nothing needs building
