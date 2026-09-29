@@ -441,7 +441,7 @@ only until the other two catch up. What the Rust emitter does:
 3. **A rule whose open alternatives are the loop's whole scaffold is a
    loop**, decided by shape rather than by name: the entry first,
    continues that each come back to the rule having consumed or pushed
-   on the way, and an exit. The guard is part of the entry's shape: the entry consumes nothing, pushes nothing,
+   on the way, and the empty exit `{ }`, with no condition. The guard is part of the entry's shape: the entry consumes nothing, pushes nothing,
    replaces the rule with itself, carries the guard `n.rep == 0`, and
    sets that counter to 1. A user rule's own non-consuming self-replace,
    a guarded or counted state transition without that guard, is not a
@@ -451,9 +451,11 @@ only until the other two catch up. What the Rust emitter does:
    nothing), one continue of several that does not, one that comes back
    having taken nothing, no exit, an empty exit before a continue,
    which it shadows whenever its condition, if it has one, holds, the
-   entry anywhere but first, or a second entry, which is neither a
+   entry anywhere but first, a second entry, which is neither a
    continue nor an exit (the first has set the counter, so its guard
-   never holds). A FOLLOW peek before the continues shadows only what it peeks: the
+   never holds), an exit under a condition, which may never hold, or
+   a FOLLOW peek with no empty exit, which stops the rule only where
+   that token comes next. The compiler never guards an exit. A FOLLOW peek before the continues shadows only what it peeks: the
    compiler puts one there where a keyword must end the loop rather
    than be taken as an item (`*word "end"` with `word = 1*ALPHA`). A continue comes back
    when it replaces with the rule, or with a synthetic helper every way
@@ -470,9 +472,10 @@ only until the other two catch up. What the Rust emitter does:
    foldable group the iteration pushes, and the `$alt` / `$step` chain
    the compiler gives a group whose alternative starts with a rule
    (`( *A B / C )` has one). A kept production inside the iteration, a
-   user rule, a nested loop or an old push-chain star, stays a reference
-   by name with its own production, and nothing beyond it is reached; a
-   `_plus` is judged for itself. The loop is rendered wherever it is
+   user rule, a nested loop, an old push-chain star or a synthetic rule
+   that repeats by a cycle of its own, not through the loop, stays a
+   reference by name with its own production, and nothing beyond it is
+   reached; a `_plus` is judged for itself. The loop is rendered wherever it is
    referenced as a repetition of its iteration: `*A` and `*"a"` when the
    iteration is one element, `*( a b )` otherwise, where the iteration
    is the ` / `-joined rendering of the continue alternatives. A
@@ -497,7 +500,10 @@ only until the other two catch up. What the Rust emitter does:
    of the iteration, and renders as the rule's name: `H = *A [ B H ]`.
    A synthetic loop renders inline, wherever a rule refers to it, with
    no name of its own to render there, so a synthetic rule whose closes
-   reach it again is no loop and keeps its production.
+   may run it again is no loop and keeps its production: a close that
+   reaches it again, one whose route a function decides, and a close
+   push, which comes back to the close phase when the pushed rule ends
+   and runs the closes again. The compiler's loops have no closes.
 4. **A synthesised helper's kind is read from its own name segment**,
    the word after `_gen<n>_` in the part before any `$`, never from a
    name it embeds. A repetition's helper is named after its item: a star
@@ -531,14 +537,17 @@ an old push-chain star inside a loop's group stays a kept production,
 rest of the scaffold renders as it always did, `once = [ once / A ]`
 for the entry, `{ s: A }` and `{ }`, as do a rule item's loop whose
 step never comes back and one whose step comes back only under a
-condition, and a rule with a second entry after its continue. A user
-loop whose close re-enters it renders `once = *A [ B once ]`, and a
-synthetic rule of that shape keeps its production. Three more pin the
-bound: a
+condition, a rule with a second entry after its continue, one whose
+only exit carries a condition and one whose only exit is a FOLLOW
+peek. A user loop whose close re-enters it renders `once = *A [ B once
+]`, and a synthetic rule of that shape, or one whose close pushes, keeps
+its production. Four more pin the bound: a
 group with a `$alt` chain of its own inside a loop renders as
 `top = *( *A B / C ) D`, the plus over it as
-`top = 1*( *A B / C ) D`, and a plus whose item holds an old
-push-chain star as `top = 1*( B r-gen1-star-A C )`. No shared `test/spec` fixture pins
+`top = 1*( *A B / C ) D`, a plus whose item holds an old
+push-chain star as `top = 1*( B r-gen1-star-A C )`, and a loop over a
+helper that repeats by its own cycle as `top = *r-gen2-group-alt0`
+with `r-gen2-group-alt0 = A r-gen2-group-alt0 / B`. No shared `test/spec` fixture pins
 them yet: all three runtimes run those, and two do not render the loop
 yet. When TypeScript and Go follow, the shapes move to `test/spec` and
 this section becomes history like the one above it.

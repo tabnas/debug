@@ -1372,6 +1372,10 @@ fn rule_of_opens(opens: Opens) -> String {
 /// - a second entry follows the continue, with an exit after it or
 ///   none: the compiler writes one, and a second is neither a continue
 ///   nor an exit;
+/// - the only exit carries a condition, which may never hold, and the
+///   compiler never guards an exit;
+/// - the only exit is a FOLLOW peek, with no empty exit, so the rule
+///   stops only where that token comes next;
 /// - a function decides the continue's route.
 ///
 /// Read as a loop on its entry alone, all but one rendered as `*A`, which
@@ -1394,7 +1398,7 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
             ..Default::default()
         }
     }
-    let cases: [(&str, Opens, &str); 12] = [
+    let cases: [(&str, Opens, &str); 14] = [
         (
             "a continue that never comes back",
             |a, _| vec![loop_entry("once"), take(a), AltSpec::new()],
@@ -1493,6 +1497,39 @@ fn abnf_does_not_read_an_entry_without_its_scaffold_as_a_loop() {
         (
             "a second entry after the continue, before the exit",
             |a, _| vec![loop_entry("once"), back(a), loop_entry("once"), AltSpec::new()],
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "an exit under a condition that may never hold",
+            |a, _| {
+                vec![
+                    loop_entry("once"),
+                    back(a),
+                    AltSpec {
+                        c: vec![Condition {
+                            path: vec!["n".into(), "never".into()],
+                            op: CompareOp::Eq,
+                            value: Value::Number(1.0),
+                        }],
+                        ..Default::default()
+                    },
+                ]
+            },
+            "once = [ once / A once ]\n\nA = %s\"a\"",
+        ),
+        (
+            "a FOLLOW peek and no empty exit",
+            |a, b| {
+                vec![
+                    loop_entry("once"),
+                    back(a),
+                    AltSpec {
+                        s: vec![vec![b]],
+                        b: 1,
+                        ..Default::default()
+                    },
+                ]
+            },
             "once = [ once / A once ]\n\nA = %s\"a\"",
         ),
         (
@@ -1674,6 +1711,104 @@ fn abnf_keeps_a_plus_helper_that_repeats_by_its_own_cycle() {
 /// star to them, suppressed its production and inlined it without its
 /// epsilon branch and back edge: `*( B A C )`, exactly one `A` where the
 /// original takes any number.
+/// A loop whose iteration pushes `_gen2_group$alt0`, a synthetic rule
+/// that repeats by a cycle of its own, `A _gen2_group$alt0 / B`, and
+/// comes back to the loop. The cycle is no iteration of the loop's:
+/// read as a helper of the loop, the rule was inlined with its way back
+/// to itself rendered as nothing, `*( A / B )` for a loop that takes
+/// `*( *A B )`. It stays a production of its own, referenced by name.
+#[test]
+fn abnf_keeps_a_cyclic_helper_a_loop_pushes_as_a_production() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    let end = token(&parser, "#ZZ");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen3_star__gen2_group".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    parser.define_rule("_gen2_group$alt0", move |spec| {
+        spec.clear();
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            p: Some("_gen2_group$alt0".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        });
+        spec.add_close(AltSpec::new());
+    });
+    ref_loop(
+        &mut parser,
+        "_gen3_star__gen2_group",
+        &[a, b],
+        "_gen2_group$alt0",
+        end,
+    );
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = *r-gen2-group-alt0\nr-gen2-group-alt0 = A r-gen2-group-alt0 / B\n\nA = %s\"a\"\nB = %s\"b\""
+    );
+}
+
+/// A synthetic rule with the loop's whole open scaffold and a close
+/// that pushes a user rule. A push in a close comes back to the close
+/// phase when the pushed rule ends and runs the closes again, so the
+/// rule pushes `item` over and over, where the loop inlined as a
+/// repetition rendered `*A item`, one `item`. It is no loop, and renders
+/// as debug's main emits it.
+#[test]
+fn abnf_does_not_read_a_synthetic_loop_whose_close_pushes_as_one() {
+    let mut parser = Tabnas::new();
+    let a = parser.token_with_source("#A", "a");
+    let b = parser.token_with_source("#B", "b");
+    simple_rule(
+        &mut parser,
+        "top",
+        AltSpec {
+            p: Some("_gen1_star_A".into()),
+            ..Default::default()
+        },
+        Some(AltSpec::new()),
+    );
+    simple_rule(
+        &mut parser,
+        "item",
+        AltSpec {
+            s: vec![vec![b]],
+            ..Default::default()
+        },
+        None,
+    );
+    parser.define_rule("_gen1_star_A", move |spec| {
+        spec.clear();
+        spec.add_open(loop_entry("_gen1_star_A"));
+        spec.add_open(AltSpec {
+            s: vec![vec![a]],
+            r: Some("_gen1_star_A".into()),
+            ..Default::default()
+        });
+        spec.add_open(AltSpec::new());
+        spec.add_close(AltSpec {
+            p: Some("item".into()),
+            ..Default::default()
+        });
+    });
+    wrap_start(&mut parser, "top");
+    assert_eq!(
+        abnf(&parser),
+        "top = r-gen1-star-A\nitem = B\nr-gen1-star-A = [ r-gen1-star-A / A r-gen1-star-A ] item\n\nB = %s\"b\"\nA = %s\"a\""
+    );
+}
+
 /// A `_plus` over `( B *A C )`, its `*A` in the old push-chain shape,
 /// whose own trailing star is a loop. The plus pushes a group of its
 /// own, `_gen5_group`, which the loop's iteration does not reach and so

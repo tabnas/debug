@@ -244,16 +244,18 @@ impl<'a> Emitter<'a> {
     /// entry comes first ([`is_loop_entry`]); then at least one continue,
     /// an alternative that consumes, pushes or replaces, and every
     /// continue comes back to `rule` having made progress
-    /// ([`Emitter::continues_loop`]); and at least one exit, an
-    /// alternative that does none of those (the FOLLOW peek
-    /// `{ s: FOLLOW, b: 1 }` or `{ }`), since a repetition can stop. No
-    /// continue may follow the empty exit `{ }`, which takes whatever
-    /// comes and so shadows every alternative after it. A FOLLOW peek
-    /// shadows only what it peeks, and the compiler puts one before the
-    /// continues where a keyword must end the loop rather than be taken
-    /// as an item (`*word "end"` with `word = 1*ALPHA`). An empty exit
-    /// with a condition shadows them too, whenever the condition holds,
-    /// and a rule with one before a continue is no loop. The
+    /// ([`Emitter::continues_loop`]); and the empty exit `{ }`, an
+    /// alternative that consumes, pushes and replaces nothing and carries
+    /// no condition, since a repetition can stop whatever comes next. No
+    /// continue may follow it: it takes whatever comes and so shadows
+    /// every alternative after it. The FOLLOW peek `{ s: FOLLOW, b: 1 }`
+    /// may stand among the exits too, and shadows only what it peeks: the
+    /// compiler puts one before the continues where a keyword must end
+    /// the loop rather than be taken as an item (`*word "end"` with
+    /// `word = 1*ALPHA`). The compiler never guards an exit, and a rule
+    /// with a contentless alternative under a condition is no loop: the
+    /// condition may never hold, leaving the rule no way to stop, and
+    /// before a continue it shadows it whenever it holds. The
     /// entry alone read a rule as a loop whose continue never came back:
     /// the entry, `{ s: A }` and `{ }` take `A` at most once, and were
     /// emitted as `*A`. A continue that does not come back ends the rule
@@ -278,10 +280,18 @@ impl<'a> Emitter<'a> {
                 return false;
             }
             if !has_content(alt, rule, true) {
-                exit = true;
-                // An empty exit takes whatever comes, whenever its
-                // condition, if it has one, holds.
-                shadowed |= alt.s.is_empty();
+                // The compiler never guards an exit: one with a condition
+                // may never stop the rule, and one before a continue
+                // shadows it whenever the condition holds.
+                if !is_plain_way(alt) {
+                    return false;
+                }
+                // Only the empty exit stops the rule whatever comes next,
+                // and shadows every alternative after it.
+                if alt.s.is_empty() {
+                    exit = true;
+                    shadowed = true;
+                }
             } else if !shadowed && self.continues_loop(alt, rule, &mut known) {
                 continues = true;
             } else {
@@ -291,13 +301,23 @@ impl<'a> Emitter<'a> {
         continues && exit && (!self.is_synthetic(rule) || !self.closes_reenter(rule, spec))
     }
 
-    /// A close alternative of `rule` reaches `rule` again, directly or
-    /// through synthetic helpers. A user loop renders that re-entry as a
-    /// reference to its own production (`H = *A [ B H ]`), but a
-    /// synthetic loop is inlined wherever it is referenced and has no
-    /// name to refer back to, so a synthetic rule whose closes re-enter
-    /// it is no loop and keeps its production.
+    /// A close alternative of `rule` may run `rule` again: it pushes,
+    /// which comes back to the close phase when the pushed rule ends and
+    /// runs the closes again; its route is a function's to decide; or it
+    /// reaches `rule` again, directly or through synthetic helpers. A
+    /// user loop renders a re-entry as a reference to its own production
+    /// (`H = *A [ B H ]`), but a synthetic loop is inlined wherever it is
+    /// referenced and has no name to refer back to, so a synthetic rule
+    /// whose closes may run it again is no loop and keeps its production.
+    /// The compiler's loops have no closes.
     fn closes_reenter(&self, rule: &str, spec: &RuleSpec) -> bool {
+        if spec
+            .close
+            .iter()
+            .any(|alt| alt.p.is_some() || is_dynamic(alt))
+        {
+            return true;
+        }
         let mut visited: BTreeSet<&str> = BTreeSet::new();
         let mut pending: Vec<&str> = spec
             .close
@@ -444,7 +464,8 @@ impl<'a> Emitter<'a> {
     /// for `( *A B / C )`). A user rule the iteration pushes keeps its
     /// production; a nested loop is a loop of its own; an old push-chain
     /// star stays a kept production, as does a `_plus`, which
-    /// [`Emitter::is_foldable`] judges for itself.
+    /// [`Emitter::is_foldable`] judges for itself, and a synthetic rule
+    /// that repeats by a cycle of its own ([`Emitter::cycles`]).
     ///
     /// The bound is by kept productions, not by name. A walk that
     /// stopped only at user rules and other loops reached through a
@@ -472,7 +493,7 @@ impl<'a> Emitter<'a> {
             })
             .collect();
         while let Some(name) = pending.pop() {
-            if self.bounds_loop_helpers(&name) || helpers.contains(&name) {
+            if self.bounds_loop_helpers(&name) || helpers.contains(&name) || self.cycles(&name) {
                 continue;
             }
             let Some(spec) = self.rules.get(&name) else {
@@ -486,6 +507,42 @@ impl<'a> Emitter<'a> {
             }
         }
         helpers
+    }
+
+    /// A synthetic rule that reaches itself again through synthetic rules
+    /// none of which bounds a loop's helpers ([`Emitter::bounds_loop_helpers`]):
+    /// a repetition of its own, which no loop's iteration accounts for.
+    /// Inlined as a loop's helper, the way back to itself rendered as
+    /// nothing, through `seen`, so the helper `A H / B` pushed from a loop
+    /// came out as `*( A / B )` where the loop takes `*( *A B )`. It stays
+    /// what it was before the loop was read: a production of its own,
+    /// referenced by name. A loop's own `H$alt0` reaches itself only
+    /// through `H`, a loop, and is no cycle.
+    fn cycles(&self, name: &str) -> bool {
+        let targets = |rule: &str| -> Vec<&str> {
+            self.rules
+                .get(rule)
+                .map(|spec| {
+                    spec.open
+                        .iter()
+                        .chain(spec.close.iter())
+                        .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        let mut pending = targets(name);
+        while let Some(target) = pending.pop() {
+            if target == name {
+                return true;
+            }
+            if self.bounds_loop_helpers(target) || !visited.insert(target) {
+                continue;
+            }
+            pending.extend(targets(target));
+        }
+        false
     }
 
     /// A rule that is a production of its own, or decides that for
