@@ -272,7 +272,9 @@ impl<'a> Emitter<'a> {
         let mut known = BTreeMap::new();
         let (mut continues, mut exit, mut shadowed) = (false, false, false);
         for alt in rest {
-            if is_dynamic(alt) {
+            // The compiler writes one entry; a second can never be taken
+            // (the first set its counter) and is neither continue nor exit.
+            if is_dynamic(alt) || is_loop_entry(alt, rule) {
                 return false;
             }
             if !has_content(alt, rule, true) {
@@ -286,7 +288,39 @@ impl<'a> Emitter<'a> {
                 return false;
             }
         }
-        continues && exit
+        continues && exit && (!self.is_synthetic(rule) || !self.closes_reenter(rule, spec))
+    }
+
+    /// A close alternative of `rule` reaches `rule` again, directly or
+    /// through synthetic helpers. A user loop renders that re-entry as a
+    /// reference to its own production (`H = *A [ B H ]`), but a
+    /// synthetic loop is inlined wherever it is referenced and has no
+    /// name to refer back to, so a synthetic rule whose closes re-enter
+    /// it is no loop and keeps its production.
+    fn closes_reenter(&self, rule: &str, spec: &RuleSpec) -> bool {
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        let mut pending: Vec<&str> = spec
+            .close
+            .iter()
+            .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref()))
+            .collect();
+        while let Some(name) = pending.pop() {
+            if name == rule {
+                return true;
+            }
+            if !self.is_synthetic(name) || !visited.insert(name) {
+                continue;
+            }
+            if let Some(spec) = self.rules.get(name) {
+                pending.extend(
+                    spec.open
+                        .iter()
+                        .chain(spec.close.iter())
+                        .filter_map(|alt| alt.p.as_deref().or(alt.r.as_deref())),
+                );
+            }
+        }
+        false
     }
 
     /// A continue comes back to its loop `rule` having made progress. It
@@ -510,14 +544,18 @@ impl<'a> Emitter<'a> {
     }
 
     /// `1*A` compiles to a `_plus` helper: `A` followed by the star of `A`.
-    /// The helper folds to `A *A` when that star is a loop and nothing
-    /// else it reaches is a kept repetition; with an old-shape star, a
-    /// kept production, the helper stays a production too, as it always
-    /// has. It folds only when its walk reaches a loop, and meets no
-    /// cycle of its own on the way: a helper that re-enters itself, or
-    /// a chain of helpers that comes back round without passing through
-    /// a loop, repeats by that cycle, and folded, the cycle's back edge
-    /// rendered as nothing, so `A*` came out as one `A`. Reaches through the chain steps (`_plus$step1`) a non-terminal
+    /// The helper folds to `A *A` when that star is a loop; with an
+    /// old-shape star, a kept production, the helper stays a production
+    /// too, as it always has. Its own chain is the helper and its `$step`
+    /// helpers, which share its own segment, and only the repetition that
+    /// chain reaches is its trailing star: an old-shape star inside the
+    /// item is the item's, a production of its own referenced by name,
+    /// and neither folds nor stops the fold. It folds only when its own
+    /// chain reaches a loop, and meets no cycle on the way: a helper that
+    /// re-enters itself, or a chain of helpers that comes back round
+    /// without passing through a loop, repeats by that cycle, and folded,
+    /// the cycle's back edge rendered as nothing, so `A*` came out as one
+    /// `A`. Reaches through the chain steps (`_plus$step1`) a non-terminal
     /// item puts between the helper and its star, and through the group
     /// it pushes and that group's own `$alt` / `$step` chain, which fold:
     /// the `_plus` over `( *A B / C )` is `1*( *A B / C )`. Refusing
@@ -527,7 +565,8 @@ impl<'a> Emitter<'a> {
         // A depth-first walk with an explicit stack: `open` holds the
         // rules on the current path, so reaching one again is a cycle;
         // `done` those whose walk has finished, which a second path may
-        // reach without one.
+        // reach without one. A step is judged by the plus it belongs to,
+        // through the segment they share.
         let mut open: BTreeSet<String> = BTreeSet::new();
         let mut done: BTreeSet<String> = BTreeSet::new();
         let mut reached_loop = false;
@@ -554,14 +593,24 @@ impl<'a> Emitter<'a> {
                 stack.pop();
                 continue;
             };
+            let own = own_segment(current) == own_segment(name);
             if !self.rules.contains_key(&target) || !self.is_synthetic(&target) {
                 continue;
             }
             if self.loops.contains(&target) || self.loop_helpers.contains(&target) {
-                reached_loop |= self.loops.contains(&target);
+                reached_loop |= own && self.loops.contains(&target);
                 continue;
             }
-            if self.is_kept_repetition(&target) || open.contains(&target) {
+            if self.is_kept_repetition(&target) {
+                // The plus's own trailing star in the old shape keeps the
+                // plus a production; one inside the item stays the item's
+                // production, referenced by name.
+                if own {
+                    return false;
+                }
+                continue;
+            }
+            if open.contains(&target) {
                 return false;
             }
             if done.contains(&target) {
@@ -797,7 +846,17 @@ impl<'a> Emitter<'a> {
             .filter(|item| !item.is_empty())
             .collect();
         let iteration = repeat_of(&parts.into_iter().collect::<Vec<_>>());
-        let cont = self.close_cont(name, seen);
+        // The loop's own name is seen so that the iteration's back edges
+        // render nothing; a close that re-enters a user loop is no back
+        // edge but the rule again, and renders as its name. (A synthetic
+        // loop's closes never re-enter it: see `Emitter::closes_reenter`.)
+        let cont = if self.is_synthetic(name) {
+            self.close_cont(name, seen)
+        } else {
+            let mut outer = seen.clone();
+            outer.remove(name);
+            self.close_cont(name, &outer)
+        };
         format!("{iteration} {cont}").trim().to_string()
     }
 

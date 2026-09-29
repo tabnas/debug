@@ -450,9 +450,10 @@ only until the other two catch up. What the Rust emitter does:
    comes back (with the entry, `{ s: A }` and `{ }` take one `A` or
    nothing), one continue of several that does not, one that comes back
    having taken nothing, no exit, an empty exit before a continue,
-   which it shadows whenever its condition, if it has one, holds, or
-   the entry anywhere but first. A
-   FOLLOW peek before the continues shadows only what it peeks: the
+   which it shadows whenever its condition, if it has one, holds, the
+   entry anywhere but first, or a second entry, which is neither a
+   continue nor an exit (the first has set the counter, so its guard
+   never holds). A FOLLOW peek before the continues shadows only what it peeks: the
    compiler puts one there where a keyword must end the loop rather
    than be taken as an item (`*word "end"` with `word = 1*ALPHA`). A continue comes back
    when it replaces with the rule, or with a synthetic helper every way
@@ -480,14 +481,23 @@ only until the other two catch up. What the Rust emitter does:
    (inlined when foldable) followed by its close continuation, and the
    back edges (`r: H$alt0$step1`, then `r: H`) render nothing. `H`,
    `H$alt0` and `H$alt0$step1` are never productions of their own. A
-   `_plus` helper over a loop folds too, when its walk reaches the loop
-   and meets no cycle of its own on the way, and is written back as the
+   `_plus` helper over a loop folds too, when its own chain (the helper
+   and its `$step` helpers) reaches the loop and its walk meets no
+   cycle on the way. An old push-chain star inside the item is the
+   item's, a kept production referenced by name, and neither folds nor
+   stops the fold: only the plus's own trailing star in the old shape
+   keeps it a production. The folded helper is written back as the
    `1*A` it was compiled from (a `_rep` helper as `2*A`): element by
    element it is `A *A`, the same language, but the `abnf` crate compiles
    `A *A` and `1*A` to different recognisers, and where `A` is nullable
    the recompiled `A *A` rejects inputs the original accepts. A loop
    that is a USER rule keeps its production, whose body is the
-   repetition.
+   repetition followed by its close alternatives, as any rule's are. A
+   close that replaces with the rule re-enters it, which is no back edge
+   of the iteration, and renders as the rule's name: `H = *A [ B H ]`.
+   A synthetic loop renders inline, wherever a rule refers to it, with
+   no name of its own to render there, so a synthetic rule whose closes
+   reach it again is no loop and keeps its production.
 4. **A synthesised helper's kind is read from its own name segment**,
    the word after `_gen<n>_` in the part before any `$`, never from a
    name it embeds. A repetition's helper is named after its item: a star
@@ -521,10 +531,14 @@ an old push-chain star inside a loop's group stays a kept production,
 rest of the scaffold renders as it always did, `once = [ once / A ]`
 for the entry, `{ s: A }` and `{ }`, as do a rule item's loop whose
 step never comes back and one whose step comes back only under a
-condition. Two more pin the bound: a
+condition, and a rule with a second entry after its continue. A user
+loop whose close re-enters it renders `once = *A [ B once ]`, and a
+synthetic rule of that shape keeps its production. Three more pin the
+bound: a
 group with a `$alt` chain of its own inside a loop renders as
-`top = *( *A B / C ) D`, and the plus over it as
-`top = 1*( *A B / C ) D`. No shared `test/spec` fixture pins
+`top = *( *A B / C ) D`, the plus over it as
+`top = 1*( *A B / C ) D`, and a plus whose item holds an old
+push-chain star as `top = 1*( B r-gen1-star-A C )`. No shared `test/spec` fixture pins
 them yet: all three runtimes run those, and two do not render the loop
 yet. When TypeScript and Go follow, the shapes move to `test/spec` and
 this section becomes history like the one above it.
