@@ -361,7 +361,7 @@ imposed by the Rust engine's public API and by Rust's type system:
     here and the canonical has followed: both read the loop shape
     tabnas/bnf#80 compiles every repetition to and emit `*A` /
     `*( a b )`, where Go still lists the loop as one of its own
-    alternatives. See "The repeat loop: Go follows" below.
+    alternatives. See "The repeat loop: the Go port follows" below.
 
 
 ## Two ABNF defects, fixed in the canonical runtime
@@ -393,7 +393,7 @@ still turns up in grammars captured before the fix.
 All three runtimes emit the `collide` fixture byte-for-byte identically.
 
 
-## The repeat loop: Go follows
+## The repeat loop: the Go port follows
 
 tabnas/bnf#80 changed how the BNF compiler (which the `abnf`, `ebnf` and
 `gbnf` grammars compile through) emits every repetition. Before it, `*A`
@@ -556,10 +556,10 @@ only until Go catches up. What the two emitters do:
    name it embeds. A repetition's helper is named after its item: a star
    over an optional is `_gen3_star__gen2_opt__gen1_group`, and its
    iteration helpers carry the whole of that name. The canonical decided
-   the `[ … ]` wrap by a test for `_opt` anywhere in the name, as Go
-   still does, which is harmless while those names are never inlined
-   and, once the loop renders them inline, wrapped the loop and its
-   step as options too: `*[ [ T ] [  ] ]`,
+   the `[ … ]` wrap by a test for `_opt` anywhere in the name, and Go
+   still does. That test is harmless while those names are never
+   inlined, but once the loop rendered them inline it wrapped the loop
+   and its step as options too: `*[ [ T ] [  ] ]`,
    with an empty option RFC 5234 does not allow, where `*[ T ]` was
    meant.
 5. **The old shape renders exactly as before.** A push-chain `_star`,

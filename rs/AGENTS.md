@@ -77,7 +77,7 @@ version to fall back on and no second resolution to keep green. Clone
    has followed: both read the loop by shape and render `*A` /
    `*( a b )`, where Go still renders the loop as one of its own
    alternatives and follows later. The register entry is
-   `../docs/reference.md`, "The repeat loop: Go follows".
+   `../docs/reference.md`, "The repeat loop: the Go port follows".
 
 4. **`step` never fires.** The Rust engine has no `ctx.log` and emits no
    per-step event, so `TraceKinds::step` is accepted for option-name

@@ -22,8 +22,9 @@
 //! in `ts/test/abnf.test.js`, which builds the same grammars and pins the
 //! same text, test for test: tabnas/bnf#80 changed how every repetition
 //! compiles, the Rust emitter rendered it first, and the canonical has
-//! followed (`docs/reference.md`, "The repeat loop: Go follows"). When
-//! the Go port follows too, its suite takes the same shapes.
+//! followed (`docs/reference.md`, "The repeat loop: the Go port
+//! follows"). When the Go port follows too, its suite takes the same
+//! shapes.
 
 mod common;
 

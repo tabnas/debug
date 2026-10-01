@@ -41,8 +41,8 @@
 //! canonical. The repeat loop above was rendered here first, and the
 //! canonical has since followed, function for function; the Go port
 //! still lists the loop's entry as one of the rule's own alternatives
-//! and follows later. See `docs/reference.md`, "The repeat loop: Go
-//! follows".
+//! and follows later. See `docs/reference.md`, "The repeat loop: the Go
+//! port follows".
 
 use std::collections::BTreeSet;
 
