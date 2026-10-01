@@ -357,11 +357,11 @@ imposed by the Rust engine's public API and by Rust's type system:
     which turns tracing off. TypeScript needs the same care for its own
     `use()` wrapper (`__debugUseWrapped`), and for the same reason:
     deriving a child re-runs the parent's plugins.
-12. **The repeat loop renders as a repetition.** Here the Rust port
-    LEADS the canonical: it reads the loop shape tabnas/bnf#80 compiles
-    every repetition to and emits `*A` / `*( a b )`, where TypeScript
-    and Go still list the loop as one of its own alternatives. See "The
-    repeat loop: the Rust port leads" below.
+12. **The repeat loop renders as a repetition.** The Rust port led
+    here and the canonical has followed: both read the loop shape
+    tabnas/bnf#80 compiles every repetition to and emit `*A` /
+    `*( a b )`, where Go still lists the loop as one of its own
+    alternatives. See "The repeat loop: the Go port follows" below.
 
 
 ## Two ABNF defects, fixed in the canonical runtime
@@ -393,7 +393,7 @@ still turns up in grammars captured before the fix.
 All three runtimes emit the `collide` fixture byte-for-byte identically.
 
 
-## The repeat loop: the Rust port leads
+## The repeat loop: the Go port follows
 
 tabnas/bnf#80 changed how the BNF compiler (which the `abnf`, `ebnf` and
 `gbnf` grammars compile through) emits every repetition. Before it, `*A`
@@ -418,20 +418,22 @@ grammar recognises it does nothing. An emitter that counts it as an
 alternative renders the loop as one of its own alternatives,
 `r-gen1-star-A = [ r-gen1-star-A / r-gen1-star-A-alt0 ]`, and the
 recompiled grammar rejects inputs the original accepts. That is what
-the canonical TypeScript (`emitAbnf` in `ts/src/debug.ts`) and the Go
-port emit today for a grammar in the new shape.
+the Go port emits today for a grammar in the new shape, and what the
+canonical emitted until it followed.
 
-**The Rust emitter (`rs/src/abnf.rs`) implements the fix first; the
-canonical and Go follow later.** This is the one place a port leads,
+**The Rust emitter (`rs/src/abnf.rs`) implemented the fix first, and
+the canonical (`emitAbnf` in `ts/src/debug.ts`) has since taken the
+same rendering, function for function; Go follows later.** It is
 recorded here as the authority rules require, and it is a divergence
-only until the other two catch up. What the Rust emitter does:
+only until Go catches up. What the two emitters do:
 
-1. **Content is what an alternative consumes.** `has_content` is
-   `len(s) - b > 0`, or a `p` target, or any `r` target except a
-   loop's own entry, which replaces with its rule and which point 2
-   skips. `{ }` and the FOLLOW peek `{ s: FOLLOW, b: 1 }`
-   are both epsilon. (The canonical still tests "`s` non-empty, or `p`,
-   or `r`", which is how the entry and the peek were counted.)
+1. **Content is what an alternative consumes.** `has_content`
+   (`hasContent` in TypeScript) is `len(s) - b > 0`, or a `p` target,
+   or any `r` target except a loop's own entry, which replaces with its
+   rule and which point 2 skips. `{ }` and the FOLLOW peek
+   `{ s: FOLLOW, b: 1 }` are both epsilon. (Go still tests "`s`
+   non-empty, or `p`, or `r`", which is how the entry and the peek were
+   counted, and the canonical did until it followed.)
 2. **The self-replace entry is skipped** when rendering its own rule: it
    is bookkeeping, not syntax. Every other replace with the rule itself
    is content, as before: the close `{ s: A, b: 1, r: rule }` after an
@@ -451,7 +453,14 @@ only until the other two catch up. What the Rust emitter does:
      guarded or counted state transition without that guard, is no
      loop and renders as a reference to the rule, as it always did. A
      second entry is neither a continue nor an exit: the first has set
-     the counter, so its guard never holds.
+     the counter, so its guard never holds. The TypeScript engine keeps
+     no declarative condition, only the closure it compiles one to, so
+     the canonical reads the guard from what that closure does: it
+     reads `n.rep` and nothing else, and holds when the counter is unset
+     or 0 and not when it is 1 or -1, which among the declarative
+     operators only `$eq 0` does. It reads only the engine's own
+     closure: a condition the grammar wrote as a function is never the
+     guard, however it behaves, just as a Rust `c_fn` never is.
    - **At least one continue**, in one of the compiler's two shapes,
      each taking one item and coming back. A terminal continue consumes
      its token and replaces with the rule, giving back any it peeked
@@ -546,18 +555,19 @@ only until the other two catch up. What the Rust emitter does:
    the word after `_gen<n>_` in the part before any `$`, never from a
    name it embeds. A repetition's helper is named after its item: a star
    over an optional is `_gen3_star__gen2_opt__gen1_group`, and its
-   iteration helpers carry the whole of that name. The canonical decides
-   the `[ … ]` wrap by a test for `_opt` anywhere in the name, which is
-   harmless there (those names are never inlined) and, once the loop
-   renders them inline, wrapped the loop and its step as options too:
-   `*[ [ T ] [  ] ]`,
+   iteration helpers carry the whole of that name. The canonical decided
+   the `[ … ]` wrap by a test for `_opt` anywhere in the name, and Go
+   still does. That test is harmless while those names are never
+   inlined, but once the loop rendered them inline it wrapped the loop
+   and its step as options too: `*[ [ T ] [  ] ]`,
    with an empty option RFC 5234 does not allow, where `*[ T ]` was
    meant.
 5. **The old shape renders exactly as before.** A push-chain `_star`,
    its `_plus` and their `$alt` helpers carry no self-replace entry and
    stay kept productions (`r-gen1-star-A = [ A r-gen1-star-A ]`), as
-   `TestAbnfKeepsRepetitionProduction`, the TypeScript "keeps repetition
-   as a production" case and `abnf_keeps_a_repetition_production` pin.
+   `TestAbnfKeepsRepetitionProduction`, the TypeScript "keeps an
+   old-shape star as a production" case and
+   `abnf_keeps_a_repetition_production` pin.
 
 The shapes are pinned by `rs/tests/abnf_test.rs` (`rep = *"a"`,
 `rep = 1*"a"`, `rep = 2*"a"`, `n = 2*4"z"`, `doc = *item`,
@@ -566,8 +576,14 @@ The shapes are pinned by `rs/tests/abnf_test.rs` (`rep = *"a"`,
 `top = 1*( "a" "b" )`, `top = 1*( "a" / "b" )`, hand-built from
 the compiler's output because the emitter must never gain an ABNF
 dependency, even in a test), which check the emitted text is RFC 5234
-(no dangling `/`, legal rule names). More pin what the shape excludes,
-each rendering as it always did:
+(no dangling `/`, legal rule names). The `abnf repeat loops` suite in
+`ts/test/abnf.test.js` builds every one of them the same way and pins
+the same text, test for test, with cases of its own for what only the
+canonical meets: the entry's guard read from a compiled closure, and a
+route that is itself a function. The compiled cases in the same file
+add `rep = *PL` and `rep = 1*PL`, compiled by `@tabnas/abnf` and
+written back as they were. More pin what the shape excludes, each
+rendering as it always did:
 
 - a user rule's unguarded self-replace, `st = st / A / B`
 - a guarded close continuation, `one = A [ one ]`
@@ -600,6 +616,6 @@ repeats by its own cycle as `top = *r-gen2-group-alt0` with
 `r-gen2-group-alt0 = A r-gen2-group-alt0 / B`, and a loop over a `$alt`
 rule with an empty way as `top = *r-gen2-group-alt0` with
 `r-gen2-group-alt0 = [ A ] B`. No shared `test/spec` fixture pins
-them yet: all three runtimes run those, and two do not render the loop
-yet. When TypeScript and Go follow, the shapes move to `test/spec` and
-this section becomes history like the one above it.
+them yet: all three runtimes run those, and Go does not render the
+loop yet. When Go follows, the shapes move to `test/spec` and this
+section becomes history like the one above it.

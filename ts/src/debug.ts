@@ -477,6 +477,20 @@ function emitAbnf(tabnas: Tabnas): string {
   const toTin = (t: any): number | undefined =>
     'number' === typeof t ? t : (cfg.t as any)[t]
 
+  const used = new Map<string, string>()
+  const terminal = (tin: number): string =>
+    emitAbnfTerminal(tabnas, cfg, tin, used, abnfName)
+
+  const has = (name: string): boolean => null != rules[name]
+  const opensOf = (name: string): any[] => (rules[name] as any)?.def?.open || []
+  const closesOf = (name: string): any[] => (rules[name] as any)?.def?.close || []
+  const slots = (alt: any): number[][] => abnfSlots(alt, toTin)
+  const back = (alt: any): number => abnfBack(alt, slots(alt).length)
+  const targets = (name: string): string[] =>
+    [...opensOf(name), ...closesOf(name)]
+      .map(abnfTarget)
+      .filter((t): t is string => null != t)
+
   // A rule the abnf forward-compiler synthesised for a `[...]` / `*(...)` /
   // `1*(...)` / group / chain-step: named `_gen<n>_…` or carrying a `$`.
   // These are never user-authored, so instead of emitting them as their own
@@ -484,23 +498,385 @@ function emitAbnf(tabnas: Tabnas): string {
   // reasonable round-trip (`tn.abnf(G)` then `debug.abnf()` reproduces `G`,
   // not the expanded internal form).
   const isSynthetic = (name: string): boolean =>
-    name !== synthWrapper && (/^_gen\d/.test(name) || name.includes('$'))
+    name !== synthWrapper && (abnfIsGenName(name) || name.includes('$'))
 
-  // We only fold the clean cases — `[…]` optionals plus the group / chain
-  // helpers they inline through. Repetition (`_star` / `_plus`) uses a
-  // probe-optimised subgraph that does not reconstruct reliably, so those
-  // rules (and their `$alt…` helpers) are emitted as productions unchanged
-  // (still a valid, recognition-equivalent grammar).
-  const isFoldable = (name: string): boolean =>
-    isSynthetic(name) && !/_star|_plus|\$alt/.test(name)
+  // ---- The repeat loop ------------------------------------------------------
+  //
+  // A repetition is read by SHAPE, not by name. Since tabnas/bnf#80 the BNF
+  // compiler (which abnf, ebnf and gbnf compile through) emits every `*A` as
+  // a replace loop: a helper `H` whose first open alternative is the entry
+  // `{ c: { 'n.rep': 0 }, n: { rep: 1 }, r: H }` (it consumes nothing,
+  // pushes nothing and replaces the rule with itself under the guard,
+  // allocating the node and counting the iteration), followed by the
+  // continue alternatives that take one item and come back to `H`, and by
+  // the exits (a FOLLOW peek `{ s: FOLLOW, b: 1 }` and `{ }`). The guard is
+  // part of the shape: `s`, `b`, `p` and `r` alone also describe a user
+  // rule's own non-consuming self-replace, a guarded or counted state
+  // transition, which is no repetition. Such a rule is rendered wherever it
+  // is referenced as `*A` / `*( a b )`, and neither it nor its iteration
+  // helpers (`H$alt0` and `H$alt0$step1`, and the `$alt` / `$step` chains of
+  // the foldable groups the iteration pushes, everything the iteration
+  // reaches short of a kept production) is emitted as a production. The
+  // older push chain (`H = A H / ε`, one frame per item) carries no such
+  // entry and renders as before, as a kept production, wherever it sits.
+  // `docs/reference.md`, "The repeat loop", has the whole contract; the
+  // Rust port (`rs/src/abnf.rs`) implements the same, function for function.
 
-  const used = new Map<string, string>()
+  // `rule` is a repeat loop: its open alternatives are the compiler's whole
+  // scaffold, in the compiler's order, not its entry alone. The entry comes
+  // first; then at least one continue that comes back to `rule` having made
+  // progress, and the empty exit `{ }`, unconditional, with no continue
+  // after it, since it takes whatever comes. FOLLOW peeks may stand among
+  // the exits, before the continues too, and shadow only what they peek. A
+  // continue a peek before it covers never runs: it still renders, so its
+  // item must be one a live continue takes too. No alternative may be one
+  // a function routes, and a synthetic loop's closes, if any, do nothing.
+  const isLoop = (rule: string): boolean => {
+    const open = opensOf(rule)
+    if (0 === open.length) return false
+    const [first, ...rest] = open
+    if (!abnfIsLoopEntry(first, rule, slots(first), back(first)) || abnfIsDynamic(first)) {
+      return false
+    }
+    let continues = false
+    let exit = false
+    let shadowed = false
+    const dead = shadowedByPeeks(open, rule)
+    const liveItems: (string | null)[] = []
+    const deadItems: (string | null)[] = []
+    for (let index = 0; index < rest.length; index++) {
+      const alt = rest[index]
+      // The compiler writes one entry; a second can never be taken (the
+      // first set its counter) and is neither continue nor exit.
+      if (abnfIsDynamic(alt) || abnfIsLoopEntry(alt, rule, slots(alt), back(alt))) {
+        return false
+      }
+      const s = slots(alt)
+      if (!hasContentAs(alt, rule, true)) {
+        // The compiler never guards an exit, and its exits give back
+        // exactly what they peek: the empty exit nothing, a FOLLOW peek
+        // its tokens.
+        if (
+          !abnfIsPlainWay(alt) ||
+          back(alt) !== s.length ||
+          s.some((slot) => 0 === slot.length)
+        ) {
+          return false
+        }
+        // Only the empty exit stops the rule whatever comes next, and
+        // shadows every alternative after it.
+        if (0 === s.length) {
+          exit = true
+          shadowed = true
+        }
+      } else if (!shadowed && continuesLoop(alt, rule)) {
+        const item = continueItem(alt, rule)
+        if (dead[index + 1]) {
+          deadItems.push(item)
+        } else {
+          continues = true
+          liveItems.push(item)
+        }
+      } else {
+        return false
+      }
+    }
+    return (
+      continues &&
+      exit &&
+      deadItems.every((item) => liveItems.includes(item)) &&
+      (!isSynthetic(rule) || closesOf(rule).every((alt) => isIdle(alt)))
+    )
+  }
 
-  const hasContent = (alt: any): boolean =>
-    (Array.isArray(alt.s) ? 0 < alt.s.length : null != alt.s) ||
-    'string' === typeof alt.p ||
-    'string' === typeof alt.r
-  const contentOpens = (rs: any): any[] => (rs.def.open || []).filter(hasContent)
+  // The item a continue of the loop `rule` takes: the token a terminal
+  // continue consumes, or the rule the iteration helper pushes.
+  const continueItem = (alt: any, rule: string): string | null => {
+    if (abnfReplace(alt) === rule) {
+      const s = slots(alt)
+      return 0 < s.length ? abnfTokenItem(s[0]) : null
+    }
+    const helper = abnfReplace(alt)
+    if (null == helper || !has(helper)) return null
+    const first = opensOf(helper)[0]
+    const pushed = null == first ? null : abnfPush(first)
+    return null == pushed ? null : abnfRuleItem(pushed)
+  }
+
+  // A continue in one of the compiler's two shapes, coming back to its loop
+  // `rule` having taken one item. A terminal continue consumes its token
+  // and replaces with `rule`, giving back any it peeked after it
+  // (`{ s: [A], r: H }`, `{ s: [A, X], b: 1, r: H }`). A rule continue
+  // peeks the item's first tokens, gives them all back and replaces with
+  // the loop's iteration helper, which pushes the item and comes back.
+  // Either sets no counter, carries no guard but the suffix-debt counter,
+  // and matches no empty token slot.
+  const continuesLoop = (alt: any, rule: string): boolean => {
+    const s = slots(alt)
+    if (
+      null != abnfPush(alt) ||
+      0 === s.length ||
+      s.some((slot) => 0 === slot.length) ||
+      0 < Object.keys(abnfCounters(alt)).length ||
+      !abnfIsGuardedAsCompiled(alt)
+    ) {
+      return false
+    }
+    const target = abnfReplace(alt)
+    if (null == target) return false
+    if (target === rule) return s.length === back(alt) + 1
+    return s.length === back(alt) && isIterationHelper(target, rule)
+  }
+
+  // `helper` is the iteration helper the compiler gives the loop `rule`
+  // over a rule item, and nothing else: its one open pushes the item (a
+  // rule other than `rule`, which reaches `rule` by no synthetic way of
+  // its own), its one close replaces with its step, and the step's one
+  // open replaces with `rule`, all matching no token and setting no counter
+  // but `rep` (`H$alt0` -> `H$alt0$step1` -> `H`).
+  const isIterationHelper = (helper: string, rule: string): boolean => {
+    const bare = (alt: any): boolean =>
+      0 === slots(alt).length &&
+      0 === back(alt) &&
+      null == abnfPush(alt) &&
+      abnfIsHelperWay(alt)
+    if (!has(helper)) return false
+    const helperOpens = opensOf(helper)
+    const helperCloses = closesOf(helper)
+    if (1 !== helperOpens.length || 1 !== helperCloses.length) return false
+    const [open] = helperOpens
+    const [close] = helperCloses
+    const item = abnfPush(open)
+    if (null == item || item === rule) return false
+    if (
+      0 !== slots(open).length ||
+      0 !== back(open) ||
+      null != abnfReplace(open) ||
+      !abnfIsHelperWay(open)
+    ) {
+      return false
+    }
+    if (!isSynthetic(helper) || !bare(close) || reaches(item, rule)) return false
+    const step = abnfReplace(close)
+    if (null == step || !has(step)) return false
+    const stepOpens = opensOf(step)
+    if (1 !== stepOpens.length) return false
+    return (
+      isSynthetic(step) &&
+      bare(stepOpens[0]) &&
+      abnfReplace(stepOpens[0]) === rule &&
+      closesOf(step).every((alt) => isIdle(alt))
+    )
+  }
+
+  // `from` reaches `rule`, by a push or a replace, itself or through
+  // synthetic rules: an item that does repeats `rule` inside its own
+  // iteration, which the repetition cannot render.
+  const reaches = (from: string, rule: string): boolean => {
+    const visited = new Set<string>()
+    const pending = [from]
+    while (0 < pending.length) {
+      const name = pending.pop() as string
+      if (name === rule) return true
+      if ((name !== from && !isSynthetic(name)) || visited.has(name)) continue
+      visited.add(name)
+      if (has(name)) pending.push(...targets(name))
+    }
+    return false
+  }
+
+  // The iteration helpers of every loop: the synthetic rules reachable from
+  // its continue alternatives without passing through a KEPT PRODUCTION,
+  // which the walk neither enters nor adds: a user rule, another loop, an
+  // old push-chain repetition, a `_plus` (judged for itself), a synthetic
+  // rule that repeats by a cycle of its own, and one with an empty way
+  // through. The bound is by kept productions, not by name.
+  const findLoopHelpers = (): Set<string> => {
+    const helpers = new Set<string>()
+    const pending: string[] = []
+    for (const name of [...loops].sort()) {
+      for (const alt of opensOf(name)) {
+        const target = abnfTarget(alt)
+        if (null != target && target !== name) pending.push(target)
+      }
+    }
+    while (0 < pending.length) {
+      const name = pending.pop() as string
+      if (
+        boundsLoopHelpers(name) ||
+        helpers.has(name) ||
+        cycles(name) ||
+        isNullableUnfolded(name)
+      ) {
+        continue
+      }
+      if (!has(name)) continue
+      helpers.add(name)
+      pending.push(...targets(name))
+    }
+    return helpers
+  }
+
+  // A synthetic rule with an empty way through its opens, which nothing but
+  // a loop's inlining would inline: not an optional's own helper, nor a
+  // foldable rule. It stays a production of its own, referenced by name.
+  const isNullableUnfolded = (name: string): boolean =>
+    !abnfIsHelper(name, 'opt') &&
+    !isFoldable(name) &&
+    has(name) &&
+    opensOf(name).some((alt) => !hasContentAs(alt, name, false))
+
+  // A synthetic rule that reaches itself again through synthetic rules none
+  // of which bounds a loop's helpers: a repetition of its own, which no
+  // loop's iteration accounts for. A loop's own `H$alt0` reaches itself
+  // only through `H`, a loop, and is no cycle.
+  const cycles = (name: string): boolean => {
+    const visited = new Set<string>()
+    const pending = targets(name)
+    while (0 < pending.length) {
+      const target = pending.pop() as string
+      if (target === name) return true
+      if (boundsLoopHelpers(target) || visited.has(target)) continue
+      visited.add(target)
+      pending.push(...targets(target))
+    }
+    return false
+  }
+
+  // A rule that is a production of its own, or decides that for itself,
+  // and so bounds the iteration helpers of every loop: a user rule, a
+  // loop, or a repetition helper that is no loop's own (an old push-chain
+  // `_star` with its helpers, and a `_plus` in either shape). A loop's own
+  // `H$alt0` and `H$alt0$step1` carry the loop's whole name and are read
+  // by their own segment: the loop.
+  const boundsLoopHelpers = (name: string): boolean => {
+    if (!isSynthetic(name) || loops.has(name)) return true
+    const kind = abnfGenKind(name)
+    return ('star' === kind || 'plus' === kind) && !loops.has(abnfOwnSegment(name))
+  }
+
+  // A repetition helper in the old push-chain shape, kept as a production
+  // as it always was: a `_star` that is not a loop, or one of its iteration
+  // helpers, which carry its name.
+  const isKeptRepetition = (name: string): boolean =>
+    'star' === abnfGenKind(name) && !loops.has(abnfOwnSegment(name))
+
+  // Only the clean cases fold: `[…]` optionals plus the group / chain
+  // helpers they inline through, and a `_plus` built over a loop. A
+  // repetition in the old push-chain shape (`_star` / `_plus` and their
+  // `$alt…` helpers) does not reconstruct reliably, so those rules are
+  // emitted as productions unchanged (still a valid, recognition-equivalent
+  // grammar). A repetition in the loop shape is not decided here: see
+  // `isFolded`. The kind is read from the rule's own name segment, so a
+  // helper named after a repetition it merely contains is judged by what
+  // it is.
+  const isFoldable = (name: string): boolean => {
+    if (!isSynthetic(name) || 'star' === abnfGenKind(name) || name.includes('$alt')) {
+      return false
+    }
+    return 'plus' !== abnfGenKind(name) || plusFolds(name)
+  }
+
+  // `1*A` compiles to a `_plus` helper: `A` followed by the star of `A`. The
+  // helper folds when that star is a loop and the helper is the compiler's
+  // own construction over the loop's item, and its walk meets no cycle; it
+  // is then written back as the `1*A` it was compiled from. With an
+  // old-shape star the helper stays a production, as it always has. Its own
+  // chain is the helper and its `$step` helpers, which share its own
+  // segment; an old-shape star inside the item is the item's, referenced by
+  // name, and neither folds nor stops the fold.
+  const plusFolds = (name: string): boolean => {
+    // A depth-first walk with an explicit stack: `open` holds the rules on
+    // the current path, so reaching one again is a cycle; `done` those
+    // whose walk has finished, which a second path may reach without one.
+    const open = new Set<string>([name])
+    const done = new Set<string>()
+    let reachedLoop = false
+    const stack: [string, string[]][] = [[name, targets(name)]]
+    while (0 < stack.length) {
+      const [current, pending] = stack[stack.length - 1]
+      const target = pending.pop()
+      if (undefined === target) {
+        open.delete(current)
+        done.add(current)
+        stack.pop()
+        continue
+      }
+      const own = abnfOwnSegment(current) === abnfOwnSegment(name)
+      if (!has(target) || !isSynthetic(target)) continue
+      if (loops.has(target) || loopHelpers.has(target)) {
+        reachedLoop = reachedLoop || (own && loops.has(target))
+        continue
+      }
+      if (isKeptRepetition(target)) {
+        // The plus's own trailing star in the old shape keeps the plus a
+        // production; one inside the item stays the item's production.
+        if (own) return false
+        continue
+      }
+      if (open.has(target)) return false
+      if (done.has(target)) continue
+      open.add(target)
+      stack.push([target, targets(target)])
+    }
+    const plus = abnfOwnSegment(name)
+    const tail = loopAfter(plus)
+    return reachedLoop && null != tail && null != countedByConstruction(plus, tail)
+  }
+
+  // A rule rendered where it is referenced and never as a production of its
+  // own, unless it is the start rule: a foldable synthetic, a synthetic
+  // loop, or a loop's iteration helper. A loop that is a USER rule keeps
+  // its production (its body is the repetition).
+  const isFolded = (name: string): boolean =>
+    isFoldable(name) ||
+    (loops.has(name) && isSynthetic(name)) ||
+    loopHelpers.has(name)
+
+  // An alternative that does nothing, as the closes of the compiler's loops
+  // do: it matches no token, pushes and replaces nothing, and carries no
+  // condition.
+  const isIdle = (alt: any): boolean =>
+    0 === slots(alt).length &&
+    0 === back(alt) &&
+    null == abnfPush(alt) &&
+    null == abnfReplace(alt) &&
+    abnfIsPlainWay(alt)
+
+  // `hasContent` for an alt of a rule that is a loop, or is not: only a
+  // loop has an entry to skip.
+  const hasContentAs = (alt: any, rule: string, ruleIsLoop: boolean): boolean =>
+    abnfHasContent(alt, rule, ruleIsLoop, slots(alt), back(alt))
+  const hasContent = (alt: any, name: string): boolean =>
+    hasContentAs(alt, name, loops.has(name))
+
+  // For each open alternative of the loop `rule`, whether it is a continue
+  // that a FOLLOW peek before it covers, and so never runs.
+  const shadowedByPeeks = (open: any[], rule: string): boolean[] => {
+    const peeks: number[][][] = []
+    return open.map((alt) => {
+      const s = slots(alt)
+      if (!hasContentAs(alt, rule, true)) {
+        if (0 < s.length) peeks.push(s)
+        return false
+      }
+      return peeks.some((peek) => abnfCovers(peek, s))
+    })
+  }
+
+  // ---- Rendering ------------------------------------------------------------
+
+  // The open alternatives with content. An empty one is dropped, because an
+  // inlined construct contributes only its content.
+  const contentOpens = (name: string): any[] =>
+    opensOf(name).filter((alt) => hasContent(alt, name))
+
+  // An alt whose whole sequence is the single end-of-source token.
+  const isEndAlt = (alt: any): boolean => {
+    if (null == endTin) return false
+    const s = slots(alt)
+    return 1 === s.length && 1 === s[0].length && endTin === s[0][0]
+  }
 
   // Render one alt as an ABNF element sequence: its `.s` tokens then its
   // `.p`/`.r` target (synthetic targets are inlined).
@@ -510,77 +886,86 @@ function emitAbnf(tabnas: Tabnas): string {
   // only: matched to choose the alt, then pushed back. Rendering them as ABNF
   // elements claims input the alt never eats.
   //
-  // This used to test `alt.b && (push || replace)`, which covered a peeking
-  // alt that delegates to a pushed rule but MISSED the FIRST-set-guarded
-  // epsilon: `{ s: '#Y', b: 1 }` with no target, which @tabnas/abnf emits for
-  // the skip branch of an optional, where #Y is the FOLLOW token. That
-  // rendered as a consuming alternative, so `top = [ X "@" ] Y` came back as
-  // `top = [ X T / Y ] Y` — the optional could swallow the follow, and `"b"`
-  // stopped parsing. Deriving from the count covers both, and any partial
-  // backtrack (b < len) besides.
+  // Deriving the count this way also covers the FIRST-set-guarded epsilon:
+  // `{ s: '#Y', b: 1 }` with no target, which @tabnas/abnf emits for the
+  // skip branch of an optional, where #Y is the FOLLOW token. Rendered as a
+  // consuming alternative, `top = [ X "@" ] Y` came back as
+  // `top = [ X T / Y ] Y`: the optional could swallow the follow.
   const seqOfAlt = (alt: any, seen: Set<string>): string => {
     const els: string[] = []
-    const all: any[] = Array.isArray(alt.s)
-      ? alt.s
-      : null == alt.s
-        ? []
-        : [alt.s]
-    const back =
-      null == alt.b ? 0 : true === alt.b ? all.length : Number(alt.b) || 0
-    const seq: any[] = all.slice(0, Math.max(0, all.length - back))
-    for (const item of seq) {
-      if (null == item) continue
-      if (Array.isArray(item)) {
-        const inner = item
-          .map(toTin)
-          .filter((t: any): t is number => null != t && t !== endTin)
-          .map((t: number) => emitAbnfTerminal(tabnas, cfg, t, used, abnfName))
-        if (0 < inner.length) els.push('( ' + inner.join(' / ') + ' )')
+    const s = slots(alt)
+    const keep = Math.max(0, s.length - back(alt))
+    for (const position of s.slice(0, keep)) {
+      if (0 === position.length) continue
+      if (1 === position.length) {
+        if (position[0] === endTin) continue
+        els.push(terminal(position[0]))
         continue
       }
-      const tin = toTin(item)
-      if (null == tin || tin === endTin) continue
-      els.push(emitAbnfTerminal(tabnas, cfg, tin, used, abnfName))
+      const inner = position.filter((t) => t !== endTin).map(terminal)
+      if (0 < inner.length) els.push('( ' + inner.join(' / ') + ' )')
     }
-    const target =
-      'string' === typeof alt.p ? alt.p : 'string' === typeof alt.r ? alt.r : null
-    if (target) els.push(inlineRef(target, seen))
+    const target = abnfTarget(alt)
+    if (null != target) {
+      const reference = inlineRef(target, seen)
+      if ('' !== reference) els.push(reference)
+    }
     return els.join(' ')
   }
 
   // The close-alt continuation of a rule: its trailing element sequence,
   // wrapped in `[ … ]` when an epsilon (empty) close alt makes it optional.
-  const closeCont = (rs: any, seen: Set<string>): string => {
-    const closes: any[] = rs.def.close || []
-    const isEnd = (alt: any) => {
-      const first =
-        Array.isArray(alt.s) && 1 === alt.s.length ? toTin(alt.s[0]) : undefined
-      return null != endTin && first === endTin
-    }
-    const hasEpsilon = closes.some(
-      (a) => !isEnd(a) && !hasContent(a),
-    )
+  const closeCont = (name: string, seen: Set<string>): string => {
+    const closes = closesOf(name)
+    const hasEpsilon = closes.some((a) => !isEndAlt(a) && !hasContent(a, name))
     for (const alt of closes) {
-      if (isEnd(alt) || !hasContent(alt)) continue
+      if (isEndAlt(alt) || !hasContent(alt, name)) continue
       const cont = seqOfAlt(alt, seen)
-      if (!cont) continue
+      if ('' === cont) continue
       return hasEpsilon ? '[ ' + cont + ' ]' : cont
     }
     return ''
   }
 
-  // Full ABNF for a rule body: open alternatives joined by `/`, then any
-  // close continuation.
-  const ruleSeq = (rs: any, seen: Set<string>): string => {
+  // Open alternatives joined by `/`, then any close continuation. Unlike
+  // emitBody an empty open alternative is dropped, because an inlined
+  // construct contributes only its content.
+  const ruleSeq = (name: string, seen: Set<string>): string => {
     const alts = [
-      ...new Set(contentOpens(rs).map((a: any) => seqOfAlt(a, seen)).filter(Boolean)),
+      ...new Set(contentOpens(name).map((a) => seqOfAlt(a, seen)).filter(Boolean)),
     ]
-    return (alts.join(' / ') + ' ' + closeCont(rs, seen)).trim()
+    const cont = closeCont(name, seen)
+    return (alts.join(' / ') + ' ' + cont).trim()
   }
 
-  // Full production body: like ruleSeq, but PRESERVES an empty open
-  // alternative — essential for kept `*(…)` repetition rules, whose empty
-  // alt is what makes them zero-or-more.
+  // A loop, as a repetition of its iteration: `*A` when the iteration is one
+  // element, `*( a b )` otherwise. The iteration is the ` / `-joined
+  // rendering of the continue alternatives, and its back edges render
+  // nothing: the loop is in `seen`, so `r: H` terminates like any other
+  // loop-back. The entry and the exits have no content and are skipped. Any
+  // close continuation of the loop rule runs once, after the last item, and
+  // follows the repetition; a close that re-enters a user loop is no back
+  // edge but the rule again, and renders as its name.
+  const repetition = (name: string, seen: Set<string>): string => {
+    const parts = [
+      ...new Set(contentOpens(name).map((a) => seqOfAlt(a, seen)).filter(Boolean)),
+    ]
+    const iteration = abnfRepeatOf(parts)
+    let cont: string
+    if (isSynthetic(name)) {
+      cont = closeCont(name, seen)
+    } else {
+      const outer = new Set(seen)
+      outer.delete(name)
+      cont = closeCont(name, outer)
+    }
+    return (iteration + ' ' + cont).trim()
+  }
+
+  // Full production body: open alternatives joined by `/`, then any close
+  // continuation, but PRESERVING an empty open alternative, which is
+  // essential for kept `*(…)` repetition rules, whose empty alt is what makes
+  // them zero-or-more.
   //
   // The empty alternative is rendered by wrapping the rest in `[ … ]`, NOT
   // as a trailing `/`. ABNF's grammar is
@@ -590,11 +975,17 @@ function emitAbnf(tabnas: Tabnas): string {
   // happens to accept it, which is exactly why this went unnoticed — the
   // round-trip test passed while the output was unusable anywhere else.
   // `[ A x ]` says the same thing and is valid.
-  const emitBody = (rs: any, seen: Set<string>): string => {
-    const raw = (rs.def.open || []).map((a: any) => seqOfAlt(a, seen))
+  const emitBody = (name: string, seen: Set<string>): string => {
+    // A user rule that is a loop: its production IS the repetition. One
+    // that repeats nothing matches exactly the empty string.
+    if (loops.has(name)) {
+      const body = repetition(name, seen)
+      return '' === body ? '""' : body
+    }
+    const raw = opensOf(name).map((a) => seqOfAlt(a, seen))
+    const optional = raw.some((x) => '' === x)
     const nonEmpty = [...new Set(raw.filter(Boolean))]
-    const optional = raw.some((x: string) => '' === x)
-    const cont = closeCont(rs, seen)
+    const cont = closeCont(name, seen)
 
     // Nothing but an empty alternative. `option = "[" *c-wsp alternation
     // *c-wsp "]"` and `alternation` needs at least one concatenation, so
@@ -609,41 +1000,194 @@ function emitAbnf(tabnas: Tabnas): string {
       return cont ? cont : '""'
     }
 
-    const body = optional
-      ? '[ ' + nonEmpty.join(' / ') + ' ]'
-      : nonEmpty.join(' / ')
+    const joined = nonEmpty.join(' / ')
+    const body = optional ? '[ ' + joined + ' ]' : joined
     return (body + ' ' + cont).trim()
   }
 
   // Inline a reference: a user rule stays a bareword; a synthetic rule folds
-  // back into the ABNF construct it encodes.
+  // back into the ABNF construct it encodes; a loop renders as its
+  // repetition.
   const inlineRef = (name: string, seen: Set<string>): string => {
-    // A user rule or a kept (non-foldable, e.g. repetition) synthetic rule
-    // stays a bareword reference; only foldable synthetics are inlined.
-    if (!isFoldable(name)) return abnfName.rule(name)
-    if (seen.has(name)) return '' // foldable loop-back — terminates the loop
-    const s2 = new Set(seen)
-    s2.add(name)
-    const rs: any = rules[name]
-    if (!rs) return abnfName.rule(name)
-    if (name.includes('_opt')) {
-      return '[ ' + ruleSeq(rs, s2) + ' ]'
+    if (loops.has(name)) {
+      // The back edge out of the loop's own iteration.
+      if (seen.has(name)) return ''
+      // A user rule that is a loop keeps its production.
+      if (!isSynthetic(name)) return abnfName.rule(name)
+      const inner = new Set(seen)
+      inner.add(name)
+      return repetition(name, inner)
     }
-    // group / chain-step: inline the body, parenthesising a bare
-    // multi-way alternation that will sit inside a larger sequence.
-    const body = ruleSeq(rs, s2)
-    return 1 < contentOpens(rs).length && !closeCont(rs, s2)
-      ? '( ' + body + ' )'
-      : body
+    // A user rule, or a kept (non-foldable, e.g. old-shape repetition)
+    // synthetic rule, stays a bareword reference; only foldable synthetics
+    // and a loop's iteration helpers inline.
+    if (!isFoldable(name) && !loopHelpers.has(name)) return abnfName.rule(name)
+    if (seen.has(name)) return '' // a foldable loop-back terminates the loop
+    if (!has(name)) return abnfName.rule(name)
+    const inner = new Set(seen)
+    inner.add(name)
+    // The optional's own helper, and only that: a star over an optional is
+    // named after it (`_gen3_star__gen2_opt__gen1_group`), and so are its
+    // iteration helpers, which a substring test for `_opt` wrapped in
+    // `[ … ]` too.
+    if (abnfIsHelper(name, 'opt')) {
+      return '[ ' + ruleSeq(name, inner) + ' ]'
+    }
+    const body = ruleSeq(name, inner)
+    if (abnfIsHelper(name, 'plus') || abnfIsHelper(name, 'rep')) {
+      const counted = countedRepetition(name, inner)
+      if (null != counted) return counted
+    }
+    // group / chain-step: inline the body, parenthesising a bare multi-way
+    // alternation that will sit inside a larger sequence.
+    const multi = 1 < contentOpens(name).length
+    return multi && '' === closeCont(name, inner) ? '( ' + body + ' )' : body
   }
 
+  // `1*A` compiles to a `_plus` helper that is `A` followed by the star of
+  // `A`, and `n*A` to a `_rep` helper that is `A` `n` times followed by it.
+  // Rendered element by element those read `A *A` and `A A *A`: the same
+  // language as `1*A` and `2*A`, but not the same recogniser once
+  // recompiled, where `A` is nullable or its FIRST meets its FOLLOW. So a
+  // helper whose body is the item of the loop it ends in, `n` times, then
+  // that loop's repetition, is written back as the repetition it was
+  // compiled from: `1*A`, `1*[ A ]`, `2*( a b )`.
+  const countedRepetition = (name: string, seen: Set<string>): string | null => {
+    const loopName = loopAfter(name)
+    if (null == loopName) return null
+    const count = countedByConstruction(name, loopName)
+    if (null == count) return null
+    const inner = new Set(seen)
+    inner.add(loopName)
+    const rep = repetition(loopName, inner)
+    return rep.startsWith('*') ? count + rep : null
+  }
+
+  // How many times the chain of the `_plus` / `_rep` helper `name` takes the
+  // item of the loop `tail` it ends in, when it is the compiler's
+  // construction and nothing else: each rule of the chain has one plain open
+  // alternative, consuming the loop's item token or pushing the loop's item
+  // rule (then a close replace to the next step), and the last pushes
+  // `tail` and ends.
+  const countedByConstruction = (name: string, tail: string): number | null => {
+    const item = loopItem(tail)
+    if (null == item) return null
+    const visited = new Set<string>()
+    let current = name
+    let count = 0
+    for (;;) {
+      if (visited.has(current)) return null
+      visited.add(current)
+      if (!has(current)) return null
+      const currentOpens = opensOf(current)
+      if (1 !== currentOpens.length) return null
+      const [open] = currentOpens
+      if (!abnfIsPlainWay(open) || 0 !== back(open) || null != abnfReplace(open)) {
+        return null
+      }
+      for (const slot of slots(open)) {
+        if (item !== abnfTokenItem(slot)) return null
+        count++
+      }
+      const pushed = abnfPush(open)
+      if (null != pushed && pushed === tail) {
+        const ends = closesOf(current).every(
+          (alt) =>
+            abnfIsPlainWay(alt) &&
+            0 === slots(alt).length &&
+            null == abnfPush(alt) &&
+            null == abnfReplace(alt),
+        )
+        return ends && 0 < count ? count : null
+      } else if (null != pushed && item === abnfRuleItem(pushed)) {
+        count++
+      } else if (null != pushed) {
+        return null
+      }
+      const currentCloses = closesOf(current)
+      if (1 !== currentCloses.length) return null
+      const [close] = currentCloses
+      if (!abnfIsPlainWay(close) || 0 !== slots(close).length || null != abnfPush(close)) {
+        return null
+      }
+      const next = abnfReplace(close)
+      if (null == next) return null
+      current = next
+    }
+  }
+
+  // The one item the loop `rule` repeats, as the compiler builds it: the
+  // token its terminal continues consume, or the rule its iteration helper
+  // pushes. Null for a loop over anything else.
+  const loopItem = (rule: string): string | null => {
+    if (!has(rule)) return null
+    let item: string | null = null
+    for (const alt of opensOf(rule).slice(1)) {
+      if (!hasContentAs(alt, rule, true)) continue
+      const s = slots(alt)
+      let thisItem: string
+      if (abnfReplace(alt) === rule && s.length === back(alt) + 1) {
+        thisItem = abnfTokenItem(s[0])
+      } else if (s.length === back(alt)) {
+        const helper = abnfReplace(alt)
+        if (null == helper || !has(helper)) return null
+        const helperOpens = opensOf(helper)
+        if (1 !== helperOpens.length) return null
+        const [open] = helperOpens
+        if (0 !== slots(open).length || null != abnfReplace(open) || !abnfIsPlainWay(open)) {
+          return null
+        }
+        const pushed = abnfPush(open)
+        if (null == pushed) return null
+        thisItem = abnfRuleItem(pushed)
+      } else {
+        return null
+      }
+      if (null == item) item = thisItem
+      else if (item !== thisItem) return null
+    }
+    return item
+  }
+
+  // The loop a `_plus` / `_rep` helper ends in: the open target of the last
+  // rule of its chain (linked by their close replaces), when that target is
+  // a loop. The chain is followed by its close edges only, never into the
+  // pushed item, which may hold a loop of its own.
+  const loopAfter = (name: string): string | null => {
+    const visited = new Set<string>()
+    let current = name
+    for (;;) {
+      if (visited.has(current)) return null
+      visited.add(current)
+      if (!has(current)) return null
+      const next = closesOf(current).map(abnfReplace).find((r) => null != r)
+      if (null != next && has(next)) current = next
+      else break
+    }
+    if (!has(current)) return null
+    const target = opensOf(current).map(abnfTarget).find((t) => null != t)
+    return null != target && loops.has(target) ? target : null
+  }
+
+  // The loops, decided by shape, then the helpers their iterations run
+  // through. `loopHelpers` is empty while the helpers are found, as it is
+  // in the Rust port.
+  let loops = new Set<string>()
+  let loopHelpers = new Set<string>()
+  loops = new Set(Object.keys(rules).filter((name) => isLoop(name)))
+  loopHelpers = findLoopHelpers()
+
   // Order: real start first, then the remaining USER (non-synthetic) rules.
+  // The start rule is always a production, folded or not: nothing encloses
+  // it to render it where it is referenced, and a grammar whose start is a
+  // synthetic loop (a standalone `*A`) otherwise came out with no
+  // production at all.
   const userRules = Object.keys(rules).filter(
-    (rn) => rn !== synthWrapper && !isFoldable(rn),
+    (rn) => rn !== synthWrapper && !isFolded(rn),
   )
   const ordered: string[] = []
   const seenR = new Set<string>()
-  if (startRule && rules[startRule] && !isFoldable(startRule)) {
+  if (startRule && rules[startRule]) {
     ordered.push(startRule)
     seenR.add(startRule)
   }
@@ -656,7 +1200,7 @@ function emitAbnf(tabnas: Tabnas): string {
 
   const lines: string[] = []
   for (const rn of ordered) {
-    const body = emitBody(rules[rn], new Set([rn]))
+    const body = emitBody(rn, new Set([rn]))
     lines.push(abnfName.rule(rn) + ' = ' + body)
   }
 
@@ -670,6 +1214,277 @@ function emitAbnf(tabnas: Tabnas): string {
     }
   }
   return lines.join('\n')
+}
+
+// ---- Shape predicates of the ABNF emitter, read from one alternative ------
+
+// The token slots an alternative matches, one array of tins per position,
+// as the engine normalised them (`t`): a position with several tokens
+// matches any of them. Read from `s` where `t` is absent.
+function abnfSlots(alt: any, toTin: (t: any) => number | undefined): number[][] {
+  if (Array.isArray(alt.t)) {
+    return alt.t.map((slot: any) =>
+      (Array.isArray(slot) ? slot : [slot]).filter((t: any) => 'number' === typeof t),
+    )
+  }
+  const all: any[] = Array.isArray(alt.s) ? alt.s : null == alt.s ? [] : [alt.s]
+  return all.map((item: any) =>
+    (Array.isArray(item) ? item : [item])
+      .map(toTin)
+      .filter((t: any): t is number => null != t),
+  )
+}
+
+// How many matched tokens an alternative gives back: `b`, where `true`
+// gives back every one. A backtrack a function decides counts as none
+// here, and makes the alternative dynamic (`abnfIsDynamic`).
+function abnfBack(alt: any, slotCount: number): number {
+  return null == alt.b
+    ? 0
+    : true === alt.b
+      ? slotCount
+      : 'number' === typeof alt.b
+        ? alt.b
+        : 0
+}
+
+function abnfPush(alt: any): string | null {
+  return 'string' === typeof alt.p ? alt.p : null
+}
+
+function abnfReplace(alt: any): string | null {
+  return 'string' === typeof alt.r ? alt.r : null
+}
+
+// The rule an alternative hands control to: its push, else its replace.
+function abnfTarget(alt: any): string | null {
+  return abnfPush(alt) ?? abnfReplace(alt)
+}
+
+function abnfCounters(alt: any): Record<string, any> {
+  return null != alt.n && 'object' === typeof alt.n ? alt.n : {}
+}
+
+// The one item a loop repeats, as a comparable key: a token slot its
+// continue consumes, or the rule its iteration helper pushes.
+function abnfTokenItem(slot: number[]): string {
+  return 'token:' + slot.join(',')
+}
+
+function abnfRuleItem(name: string): string {
+  return 'rule:' + name
+}
+
+// An alternative whose route, backtrack or whole shape a function decides
+// when it matches, so what it pushes, replaces or consumes cannot be read
+// from the spec.
+function abnfIsDynamic(alt: any): boolean {
+  return (
+    'function' === typeof alt.p ||
+    'function' === typeof alt.r ||
+    'function' === typeof alt.b ||
+    null != alt.h
+  )
+}
+
+// The counter a condition tests against zero, when it is the engine's own
+// declarative `{ 'n.<counter>': 0 }` and nothing else; null otherwise.
+//
+// The engine compiles a declarative condition to a closure (`ruleCond`, or
+// `conjunctCond` for several) and keeps no description of it, so the guard
+// is read from what the closure does, which is what makes it the guard: run
+// on probe rules, it reads exactly one path, `n.<counter>`, and nothing of
+// the context, and it holds when that counter is unset (an unset counter
+// reads as 0) or 0, and not when it is 1 or -1. Among the declarative
+// operators only `$eq 0` does all four. A conjunction and a closure that
+// reads anything else are not the guard, and neither is a condition the
+// grammar wrote as a function, whatever it does: the Rust port never reads
+// one (`c_fn`) as the guard, since a function may decide by anything. The
+// name does not tell the two apart (the engine names a grammar's anonymous
+// condition `ruleCond` too), the source does: the engine's own closure is
+// declared `function ruleCond(`. The Rust port reads its declarative
+// `Condition` directly; this is the same test.
+function abnfZeroGuardCounter(c: any): string | null {
+  if (
+    'function' !== typeof c ||
+    'ruleCond' !== c.name ||
+    !Function.prototype.toString.call(c).startsWith('function ruleCond(')
+  ) {
+    return null
+  }
+  const read: PropertyKey[] = []
+  const counters = new Proxy({}, {
+    get: (_t, key) => { read.push(key); return undefined },
+  })
+  const probe = new Proxy({}, {
+    get: (_t, key) => { read.push(key); return 'n' === key ? counters : undefined },
+  })
+  const ctx = new Proxy({}, {
+    get: (_t, key) => { read.push(key); return undefined },
+  })
+  let unset: any
+  try {
+    unset = c(probe, ctx, undefined)
+  } catch (e) {
+    return null
+  }
+  if (2 !== read.length || 'n' !== read[0] || 'string' !== typeof read[1]) {
+    return null
+  }
+  const counter = read[1] as string
+  const holds = (value: number): any => {
+    try {
+      return c({ n: { [counter]: value } }, {}, undefined)
+    } catch (e) {
+      return undefined
+    }
+  }
+  return true === unset &&
+    true === holds(0) &&
+    false === holds(1) &&
+    false === holds(-1)
+    ? counter
+    : null
+}
+
+// An alternative read from the spec alone, and taken whatever the rule's
+// state, with no condition of any kind.
+function abnfIsPlainWay(alt: any): boolean {
+  return !abnfIsDynamic(alt) && null == alt.c
+}
+
+// A continue guarded as the compiler guards one: by nothing, or by the
+// suffix-debt counter alone (`n.debt_… == 0`). Any other condition may
+// contradict the state the entry leaves and keep the continue from ever
+// running.
+function abnfIsGuardedAsCompiled(alt: any): boolean {
+  return (
+    !abnfIsDynamic(alt) &&
+    (null == alt.c || (abnfZeroGuardCounter(alt.c) || '').startsWith('debt_'))
+  )
+}
+
+// An alternative on a loop's way back: a plain way that sets no counter but
+// the loop's own `rep`.
+function abnfIsHelperWay(alt: any): boolean {
+  return abnfIsPlainWay(alt) && Object.keys(abnfCounters(alt)).every((k) => 'rep' === k)
+}
+
+// A repeat loop's entry, the whole of the compiler's shape: the alternative
+// matches no token, not even a peeked one, pushes nothing, replaces `rule`
+// with itself, is guarded by `n.rep == 0` and by nothing else, and sets that
+// counter to 1 and no other. `s`, `b`, `p` and `r` alone are not enough: a
+// user rule's own non-consuming self-replace has the same four and is no
+// repetition.
+function abnfIsLoopEntry(alt: any, rule: string, slots: number[][], back: number): boolean {
+  const counters = abnfCounters(alt)
+  return (
+    0 === slots.length &&
+    0 === back &&
+    null == abnfPush(alt) &&
+    abnfReplace(alt) === rule &&
+    1 === Object.keys(counters).length &&
+    1 === counters.rep &&
+    'rep' === abnfZeroGuardCounter(alt.c)
+  )
+}
+
+// An alt that contributes something to the emitted sequence of `rule`,
+// decided by what it CONSUMES: it eats a token (`len(s) - b > 0`), or
+// pushes a rule, or replaces with a rule, unless `rule` is a loop and this
+// is its entry. `{ }`, the FOLLOW peek `{ s: FOLLOW, b: 1 }` and a loop's
+// entry are all epsilon. Every other replace with `rule` itself is content:
+// the close `{ s: A, b: 1, r: rule }` after an open that consumed `A` is the
+// `[ rule ]` of `rule = A [ rule ]`.
+function abnfHasContent(
+  alt: any,
+  rule: string,
+  ruleIsLoop: boolean,
+  slots: number[][],
+  back: number,
+): boolean {
+  return (
+    !(ruleIsLoop && abnfIsLoopEntry(alt, rule, slots, back)) &&
+    (slots.length > back || null != abnfPush(alt) || null != abnfReplace(alt))
+  )
+}
+
+// The token sequence `peek` matches wherever `item` does: it is no longer,
+// and each of its slots holds every token `item`'s does.
+function abnfCovers(peek: number[][], item: number[][]): boolean {
+  return (
+    peek.length <= item.length &&
+    peek.every((slot, i) => item[i].every((tin) => slot.includes(tin)))
+  )
+}
+
+// A rule the abnf forward-compiler synthesised, named `_gen<n>_…`.
+function abnfIsGenName(name: string): boolean {
+  return /^_gen\d/.test(name)
+}
+
+// The rule a synthesised name belongs to: the part before any `$`. A chain
+// step (`_gen1_group$step1`) and an iteration helper (`H$alt0`) answer with
+// the rule they continue.
+function abnfOwnSegment(name: string): string {
+  return name.split('$')[0]
+}
+
+// The construct a synthesised name encodes (`opt`, `group`, `star`, `plus`,
+// `rep`), read from the rule's OWN segment: the word after `_gen<n>_` in the
+// part before any `$`. A repetition's helper is named after its item, so
+// `_gen3_star__gen2_opt__gen1_group` is the star over the optional over the
+// group, and a substring test for `_opt` reached all of them.
+function abnfGenKind(name: string): string | null {
+  const own = abnfOwnSegment(name)
+  if (!own.startsWith('_gen')) return null
+  const rest = own.slice(4)
+  const digits = /^\d+/.exec(rest)
+  if (null == digits) return null
+  const after = rest.slice(digits[0].length)
+  if (!after.startsWith('_')) return null
+  const kind = after.slice(1).split('_')[0]
+  return '' === kind ? null : kind
+}
+
+// `name` is the helper of `kind` itself, not a chain step or an iteration
+// helper of it, which carry a `$`.
+function abnfIsHelper(name: string, kind: string): boolean {
+  return !name.includes('$') && abnfGenKind(name) === kind
+}
+
+// A repetition over the ` / `-joined alternatives of an iteration: `*A` and
+// `*"a"` when the iteration is one element, `*( a b )` and `*( a / b )`
+// otherwise. An empty iteration is an empty repetition: nothing.
+function abnfRepeatOf(parts: string[]): string {
+  if (0 === parts.length) return ''
+  if (1 === parts.length && abnfIsOneElement(parts[0])) return '*' + parts[0]
+  return '*( ' + parts.join(' / ') + ' )'
+}
+
+// `text` is one ABNF element: a bare name or terminal, or one bracket pair
+// enclosing the whole of it. A repetition is not an element
+// (`repetition = [repeat] element`), so a nested `*I` has to be grouped:
+// `*( *I )`, never `**I`.
+function abnfIsOneElement(text: string): boolean {
+  if (/^[*0-9]/.test(text)) return false
+  if (!text.includes(' ')) return true
+  const open = text[0]
+  const close = text[text.length - 1]
+  if (!(('(' === open && ')' === close) || ('[' === open && ']' === close))) {
+    return false
+  }
+  // The opening bracket must be the one the last character closes.
+  let depth = 0
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index]
+    if ('(' === ch || '[' === ch) depth++
+    else if (')' === ch || ']' === ch) {
+      depth = Math.max(0, depth - 1)
+      if (0 === depth && index + 1 < text.length) return false
+    }
+  }
+  return 0 === depth
 }
 
 // Render a token reference: every token appears by its bare NAME (e.g.

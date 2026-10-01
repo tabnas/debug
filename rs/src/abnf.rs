@@ -38,10 +38,11 @@
 //! kept production, wherever it sits, inside a loop's iteration included.
 //!
 //! Ported from `ts/src/debug.ts` (`emitAbnf` and friends), which is
-//! canonical — except for the repeat loop above, where THIS PORT LEADS:
-//! the canonical TypeScript and the Go port still list the loop's entry
-//! as one of the rule's own alternatives and follow later. See
-//! `docs/reference.md`, "The repeat loop: the Rust port leads".
+//! canonical. The repeat loop above was rendered here first, and the
+//! canonical has since followed, function for function; the Go port
+//! still lists the loop's entry as one of the rule's own alternatives
+//! and follows later. See `docs/reference.md`, "The repeat loop: the Go
+//! port follows".
 
 use std::collections::BTreeSet;
 
@@ -1011,9 +1012,10 @@ impl<'a> Emitter<'a> {
         // and so are its iteration helpers, and a substring test for
         // `_opt` wrapped each of those in `[ … ]` too — `*[ [ T ] [  ] ]`,
         // with the step, whose only content is the back edge, as an empty
-        // option, which RFC 5234 has no room for. (The canonical
-        // TypeScript still tests the substring; it never inlined those
-        // names, so it never met them. It follows with the loop.)
+        // option, which RFC 5234 has no room for. (The canonical reads
+        // the segment too, since it followed with the loop. The Go port
+        // still tests the substring; it never inlines those names, so it
+        // never meets them.)
         if is_helper(name, "opt") {
             let body = self.rule_seq(name, &inner);
             return format!("[ {body} ]");
