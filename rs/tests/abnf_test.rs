@@ -18,11 +18,12 @@
 //! this file is the Rust half.
 //!
 //! The repeat-loop shapes (`loop_*` and `abnf_renders_a_*_loop_*` below)
-//! are held by this set ALONE for now: tabnas/bnf#80 changed how every
-//! repetition compiles, and the Rust emitter leads the canonical
-//! TypeScript and the Go port there (`docs/reference.md`, "The repeat
-//! loop: the Rust port leads"). When those follow, their suites take the
-//! same shapes.
+//! are held by this set and by the canonical's "abnf repeat loops" suite
+//! in `ts/test/abnf.test.js`, which builds the same grammars and pins the
+//! same text, test for test: tabnas/bnf#80 changed how every repetition
+//! compiles, the Rust emitter rendered it first, and the canonical has
+//! followed (`docs/reference.md`, "The repeat loop: Go follows"). When
+//! the Go port follows too, its suite takes the same shapes.
 
 mod common;
 
@@ -1168,7 +1169,7 @@ fn abnf_renders_a_plus_over_a_group_loop_as_one_or_more() {
     }
 }
 
-/// Design point 4: a grammar in the OLD shape renders exactly as before.
+/// Design point 5: a grammar in the OLD shape renders exactly as before.
 /// `1*"a"` compiled to a `_plus` helper pushing a push-chain star; the
 /// star is a kept production, so the helper stays one too, and the output
 /// is what the emitter gave before the loop shape existed: the productions
@@ -1847,16 +1848,6 @@ fn abnf_keeps_a_plus_helper_that_repeats_by_its_own_cycle() {
     assert_rfc5234_shape(&out);
 }
 
-/// `top = *( "b" *"a" "c" )` with the outer star in the loop shape and
-/// the inner star in the OLD push-chain shape, a mix a hand-built grammar
-/// can carry. A loop's helpers are the rules named after it, `H$alt0` and
-/// `H$alt0$step1`, and nothing else it reaches: the foldable group is
-/// inlined on its own account, and the old star, a kept production, stays
-/// a bareword reference inside the repetition, with its production and
-/// its epsilon branch. Finding the helpers by reachability added the old
-/// star to them, suppressed its production and inlined it without its
-/// epsilon branch and back edge: `*( B A C )`, exactly one `A` where the
-/// original takes any number.
 /// A grammar whose start rule is a synthetic loop, named directly or
 /// through the `__start__` wrapper. A synthetic loop is rendered where
 /// it is referenced, and nothing references the start: it came out with
@@ -2515,6 +2506,15 @@ fn abnf_does_not_read_a_synthetic_loop_whose_close_re_enters_it_as_one() {
     );
 }
 
+/// `top = *( "b" *"a" "c" )` with the outer star in the loop shape and
+/// the inner star in the OLD push-chain shape, a mix a hand-built grammar
+/// can carry. A loop's helpers are the synthetic rules its iteration
+/// reaches short of a kept production, and the old star is a kept
+/// production: it stays a bareword reference inside the repetition, with
+/// its production and its epsilon branch. Finding the helpers by
+/// reachability alone added the old star to them, suppressed its
+/// production and inlined it without its epsilon branch and back edge:
+/// `*( B A C )`, exactly one `A` where the original takes any number.
 #[test]
 fn abnf_keeps_an_old_shape_star_inside_a_loop_group() {
     let mut parser = Tabnas::new();

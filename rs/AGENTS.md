@@ -71,11 +71,13 @@ version to fall back on and no second resolution to keep green. Clone
 
    One such gap is open and deliberate: the repeat-loop shapes in
    `tests/abnf_test.rs` (the replace loop tabnas/bnf#80 compiles every
-   repetition to) are held here alone, because the Rust emitter LEADS
-   the canonical on them. `src/abnf.rs` reads the loop by shape and
-   renders `*A` / `*( a b )`; TypeScript and Go still render the loop as
-   one of its own alternatives and follow later. The register entry is
-   `../docs/reference.md`, "The repeat loop: the Rust port leads".
+   repetition to) are held here and by the canonical's "abnf repeat
+   loops" suite in `../ts/test/abnf.test.js`, test for test, and not
+   yet in Go. The Rust emitter rendered the loop first and the canonical
+   has followed: both read the loop by shape and render `*A` /
+   `*( a b )`, where Go still renders the loop as one of its own
+   alternatives and follows later. The register entry is
+   `../docs/reference.md`, "The repeat loop: Go follows".
 
 4. **`step` never fires.** The Rust engine has no `ctx.log` and emits no
    per-step event, so `TraceKinds::step` is accepted for option-name
