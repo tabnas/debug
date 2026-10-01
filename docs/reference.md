@@ -576,7 +576,7 @@ The shapes are pinned by `rs/tests/abnf_test.rs` (`rep = *"a"`,
 `top = 1*( "a" "b" )`, `top = 1*( "a" / "b" )`, hand-built from
 the compiler's output because the emitter must never gain an ABNF
 dependency, even in a test), which check the emitted text is RFC 5234
-(no dangling `/`, legal rule names). The "abnf repeat loops" suite in
+(no dangling `/`, legal rule names). The `abnf repeat loops` suite in
 `ts/test/abnf.test.js` builds every one of them the same way and pins
 the same text, test for test, with cases of its own for what only the
 canonical meets: the entry's guard read from a compiled closure, and a
