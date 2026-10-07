@@ -85,7 +85,8 @@ provides three things:
 - **parse tracing** that logs events as the parser runs.
 
 The plugin is a developer tool, **not part of the parse path**. It is a
-dev-only `file:` devDependency in (almost) every other tabnas repo — the
+dev-only `"*"` devDependency, installed from npm, in (almost) every other
+tabnas repo — the
 exception being `@tabnas/jsonic-cli`, which depends on it as a real prod
 peer for its `--debug` flag.
 
@@ -93,7 +94,7 @@ peer for its `--debug` flag.
 
 | Path | What it is |
 |---|---|
-| [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/debug` package. Everything lives in `src/debug.ts` (plugin, `describe`/`model`/`abnf`, trace hooks, ABNF emitter). Depends on `@tabnas/parser` (peer + sibling `file:` devDep). |
+| [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/debug` package. Everything lives in `src/debug.ts` (plugin, `describe`/`model`/`abnf`, trace hooks, ABNF emitter). Depends on `@tabnas/parser` (peer `">=0"`, mirrored as a `"*"` devDependency). |
 | [`go/`](go/) | Go port — module `github.com/tabnas/debug/go`: `debug.go` (plugin, `Describe`, `Abnf`, ABNF emitter), `model.go` (`Model` + the `Debug*` types), `trace.go` (the six trace kinds). Tracks `ts/` as far as the Go engine API allows. |
 | [`rs/`](rs/) | Rust port — the `tabnas-debug` crate: `src/lib.rs` (plugin, options, the `use_plugin` wrapper), `src/describe.rs`, `src/model.rs`, `src/abnf.rs`, `src/trace.rs`. Tracks `ts/` as far as the Rust engine API allows. Takes the engine as a **path dependency on the sibling checkout** (`../../parser/rs`). |
 | [`docs/`](docs/) | Cross-language docs by purpose: `tutorial.md`, `how-to/`, `reference.md`, `explanation.md` (see `docs/README.md`). |
@@ -111,30 +112,35 @@ The runtimes resolve the engine **differently**, and the difference
 matters when you are chasing a discrepancy:
 
 - TypeScript: `@tabnas/parser` is a `peerDependencies` `">=0"` and a
-  `"*"` devDependency in `ts/package.json`. Locally,
-  `ts/node_modules/@tabnas/parser` is a **symlink to the sibling
-  `../../parser/ts` checkout**, wired by `admin/scripts/link.sh` — so the
-  TS suite tests against sibling `main`. Do not run `npm ci` or delete
-  `node_modules`: that replaces the symlink with a registry copy.
+  `"*"` devDependency in `ts/package.json`, so `npm install` puts the
+  published engine in `ts/node_modules` and the TS suite tests that
+  release. `admin/scripts/link.sh` can replace it with a **symlink to the
+  sibling `../../parser/ts` checkout**, so the suite tests sibling `main`;
+  a later `npm install` or `npm ci` puts the registry copy back, so re-run
+  `link.sh` after one.
 - Go: `go/go.mod` requires `github.com/tabnas/parser/go` at a **pinned
   published version** and carries **no `replace`**. So `GOWORK=off go
   test` resolves the engine from the module proxy, not from the sibling
-  checkout. The repo-set `../go.work` *does* list `./debug/go`, so a plain
-  `go test` (workspace on) resolves the sibling instead. Both currently
+  checkout. Where `link.sh` has written the repo-set `../go.work` (it lists
+  `./debug/go`), a plain `go test` (workspace on) resolves the sibling
+  instead; without it, a plain `go test` uses the proxy too. Both currently
   pass; see [`go/AGENTS.md`](go/AGENTS.md) for why that gap has bitten
   before.
 - Rust: `rs/Cargo.toml` declares `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }`.
-  The crate is not published to any registry, so there is no version to
-  fall back on and no second resolution to keep green — Rust always
-  tests against sibling `main`, like TypeScript. Nothing needs building
-  first: cargo compiles the engine from source. `rust-version` is `1.85`.
+  The engine is on crates.io as `tabnas-parser`, and `release.yml`'s
+  `crates` job publishes this crate as `tabnas-debug`, but the committed
+  manifest stays path-only, so there is no version to fall back on and no
+  second resolution to keep green — Rust always tests against sibling
+  `main`. Nothing needs building first: cargo compiles the engine from
+  source. `rust-version` is `1.85`.
 
-Clone `https://github.com/tabnas/parser` as a sibling of this repo and
-build its TS (`cd parser/ts && npm install && npm run build`) before
-working here. CI clones the siblings and builds them first (see below).
+Clone `https://github.com/tabnas/parser` as a sibling of this repo for
+the Rust side; it needs no build. The TypeScript and Go sides need no
+checkout of it, but `ts/test/abnf.test.js` loads a built sibling `abnf`
+(below). CI clones the siblings and builds them first (see below).
 
-The TS tests also reach into siblings directly, by **path, not by
-dependency**:
+The TS tests also load two files directly, by **path, not through a
+package's exports**:
 - `ts/test/debug.test.js` loads the engine's compiled json grammar
   fixture from `@tabnas/parser`'s `dist-test/json-plugin.js` (resolved
   relative to the engine package) to exercise `describe`/`model` against
@@ -144,8 +150,10 @@ dependency**:
   **hard independence constraint**: `@tabnas/abnf` must *not* be a runtime
   dependency of the debug plugin; it is used in the test only.
 
-`@tabnas/abnf` (the `abnf` repo) and `@tabnas/railroad` are present as
-`file:` devDependencies for exactly these sibling test/diagram needs.
+`@tabnas/abnf` (the `abnf` repo) and `@tabnas/railroad` are `"*"`
+devDependencies, installed from npm, for these test and diagram needs.
+The ABNF round-trip still loads the sibling checkout's build by path, so
+CI's `deps` clones `abnf` (and `bnf`, which it builds on).
 
 ### Note: `scripts/fetch-parser.sh` is legacy
 
@@ -244,7 +252,7 @@ grammar repos' `test/debug-model.test.ts` consume this, so be careful:
   re-compiles via `@tabnas/abnf`.
 
 Grammar repos load `@tabnas/debug` with a **skip-if-absent guard** so
-their core suite still runs when the dev sibling isn't built.
+their core suite still runs when that dev-only package is not installed.
 
 ## Build & test
 
@@ -286,8 +294,8 @@ sibling `main`.
 
 The Makefile runs all Go commands with **`GOWORK=off`**, which pins the
 engine to the published version in `go/go.mod`. A plain `go test`
-(workspace on, since `../go.work` lists `./debug/go`) builds against the
-sibling `../parser/go` instead.
+(workspace on, where `link.sh`'s `../go.work` lists `./debug/go`) builds
+against the sibling `../parser/go` instead.
 
 **CI uses the second one.** `polyglot-ci.yml` clones the sibling repos
 and generates a `go.work` over every module that lacks a
@@ -308,11 +316,10 @@ equal `ts/package.json` "version": `go/version_test.go`,
 `ts/test/version.test.js` and `rs/tests/version_test.rs` fail the build
 if any drifts.
 
-The Rust crate is **not published**. It depends on the engine by path,
-and the `tabnas` engine crate is itself unpublished, so a registry
-release is not possible until the engine ships one — hence no
-`publish-rs` target. A version bump must still touch `rs/Cargo.toml` and
-`rs/src/lib.rs`.
+The Rust crate is published to crates.io by `release.yml`'s `crates` job,
+from the release tag, after `crates-release.yml` rewrites the engine's
+path into a crates.io requirement — hence no `publish-rs` target. A
+version bump must still touch `rs/Cargo.toml` and `rs/src/lib.rs`.
 
 ## Verify your work
 
@@ -320,7 +327,7 @@ The commands that prove a change is correct. Run them from the repo root;
 the Makefile pins the Go engine with `GOWORK=off`:
 
 ```bash
-make build && make test      # all three — TS and Rust on the sibling engine, Go PINNED
+make build && make test      # all three — TS on the installed engine, Rust on the sibling, Go PINNED
 ```
 
 Narrower, when iterating:
@@ -328,16 +335,16 @@ Narrower, when iterating:
 ```bash
 (cd ts && npm run build && npm test)   # build first: the tests are plain JS but load ../dist/
 (cd go && GOWORK=off go test ./...)    # pinned engine — what make test runs
-(cd go && go test -count=1 ./...)      # workspace on: sibling ../parser/go — what CI resolves
+(cd go && go test -count=1 ./...)      # with link.sh's go.work: sibling ../parser/go — what CI resolves
 (cd rs && cargo test --all-targets)    # sibling engine, the only Rust resolution
 ```
 
 The last two are not interchangeable: `GOWORK=off` resolves the published
 engine pinned in `go/go.mod`, while a plain `go test` (workspace on, via the
-repo-set `../go.work`) resolves the sibling checkout — and CI tests against
-parser `main`. Run both before pushing; a change green under only one
-resolution is not done. Run `gofmt -l .` and `go vet ./...` before
-committing Go.
+repo-set `../go.work` that `link.sh` writes) resolves the sibling checkout —
+and CI tests against parser `main`. Run both before pushing; a change green
+under only one resolution is not done. Run `gofmt -l .` and `go vet ./...`
+before committing Go.
 
 What "correct" means here, in order of authority:
 
@@ -391,9 +398,8 @@ The steps, in order:
    caught by `ts/test/version.test.js`, `go/version_test.go` and
    `rs/tests/version_test.rs`.
 
-   The Rust crate is not itself published — it depends on the engine by
-   path and the engine crate is unpublished — but its constants are gated
-   all the same, so a bump that skips them fails `cargo test`. `ci.yml`
+   The Rust crate is published by the release's `crates` job, and its
+   constants are gated too, so a bump that skips them fails `cargo test`. `ci.yml`
    has no Rust job, but `.github/workflows/rust.yml` runs on the bump,
    because its path filter matches the `ts/package.json` change (see the
    CI section); `make test-rs` on the bump commit catches it sooner.
@@ -417,12 +423,13 @@ The steps, in order:
    suite then passes against unreleased code while appearing to verify the
    published one. Reinstalling is the part that matters.
 
-   One thing a clean install does **not** isolate:
-   `ts/test/doc-examples.test.*` resolves `@tabnas/*` by filesystem path
-   (`const TABNAS = path.join(REPO, '..')`), not through `node_modules`. If
-   unbuilt sibling checkouts sit beside this repo, those blocks fail with
-   `MODULE_NOT_FOUND` no matter what you installed — build the siblings, or
-   verify somewhere they are absent.
+   The doc examples are covered too. `ts/test/doc-examples.test.*`
+   resolves a doc example's `require` through `node_modules` first; only a
+   `@tabnas/*` package that is not installed falls back to the sibling
+   checkout `../<x>/ts` (`const TABNAS = path.join(REPO, '..')`), and
+   `@tabnas/debug` itself to this repository's `ts/`. The only other
+   package the tested examples require, `@tabnas/parser`, is declared in
+   `ts/package.json`, so a clean install supplies it.
 
    `npm test` already compiles here: `ts/package.json` sets `pretest` to
    `npm run build`, which npm runs automatically. No separate build step is
@@ -436,13 +443,17 @@ The steps, in order:
    ```bash
    (
      cd go
-     go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod has a replace'; exit 1; }
+     go mod edit -json | jq -e '.Replace == null' >/dev/null || { echo 'go.mod has a replace'; exit 1; }
      GOWORK=off go test -count=1 ./...
    )
    ```
 
    `-count=1` because shared fixtures live outside the Go module, so a
-   changed corpus does not invalidate the test cache.
+   changed corpus does not invalidate the test cache. The check asks `jq`,
+   not `grep`: current Go leaves the `Replace` key out when there is no
+   replace, where older Go printed `"Replace": null`, and `jq` reads a
+   missing key as null, so the check passes on a clean `go.mod` and fails
+   on a replace either way.
 3. **Merge the bump through a reviewed PR.** That is the house convention —
    `CONTRIBUTING.md` squash-merges PRs and takes the title as the commit
    message — and what `release.yml`'s own header describes. A direct push to

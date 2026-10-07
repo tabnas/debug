@@ -60,12 +60,13 @@ Per-language quick starts: [`ts/README.md`](ts/README.md),
 ## Build and test
 
 All three implementations consume the
-[`tabnas`](https://github.com/tabnas/parser) parser engine. The Go module
-resolves it at a pinned published version; the TypeScript package and the
-Rust crate resolve it from a sibling `../parser` checkout, so clone that
-first and build its TypeScript
-(`cd parser/ts && npm install && npm run build`). The Rust crate does not
-need that build: cargo compiles the engine from source.
+[`tabnas`](https://github.com/tabnas/parser) parser engine. The TypeScript
+package and the Go module install the published engine from npm and the
+Go module proxy; the Rust crate takes it by path from a sibling
+`../parser` checkout, so clone that first. The TypeScript suite's `abnf`
+round-trip test also needs a built sibling `../abnf` checkout
+(`cd abnf/ts && npm install && npm run build`). The Rust crate does not
+need any build first: cargo compiles the engine from source.
 
 ```bash
 make build   # build all three implementations

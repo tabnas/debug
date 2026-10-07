@@ -1,15 +1,15 @@
 # Build, test and publish the TypeScript (ts/), Go (go/) and Rust (rs/)
 # implementations. ts/ is canonical; go/ and rs/ track it.
 #
-# TypeScript resolves the engine via the node_modules symlink to the
-# sibling ../parser/ts (wired by admin/scripts/link.sh). Rust takes the
-# engine as a path dependency on the same sibling checkout (../parser/rs),
-# so it too tests against sibling main.
+# TypeScript installs the published engine from npm; admin/scripts/link.sh
+# can replace it with a node_modules symlink to the sibling ../parser/ts.
+# Rust takes the engine as a path dependency on the sibling checkout
+# (../parser/rs), so it always tests against sibling main.
 #
 # Go uses GOWORK=off deliberately: go/go.mod carries no `replace`, so this
-# pins the engine to the PUBLISHED version in go.mod. Without it, the
-# repo-set ../go.work (which lists ./debug/go) resolves the sibling
-# ../parser/go instead.
+# pins the engine to the PUBLISHED version in go.mod. Without it, where
+# admin/scripts/link.sh has written the repo-set ../go.work (which lists
+# ./debug/go), Go resolves the sibling ../parser/go instead.
 #
 # Note that CI resolves the other way: polyglot-ci.yml clones the siblings
 # and generates a go.work over every module without a ../vendor/ replace

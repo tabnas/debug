@@ -12,14 +12,11 @@ shared fixtures use.
 
 ## 1. Add the crates
 
-The `tabnas` crate is not published to a registry, so clone
-`https://github.com/tabnas/parser` next to this repository and point at
-it:
+The engine is on crates.io as `tabnas-parser`, though code does not call
+it that: its library is `tabnas`. Add it beside this plugin, `tabnas-debug`:
 
-```toml
-[dependencies]
-tabnas = { package = "tabnas-parser", path = "../parser/rs" }
-tabnas-debug = { path = "../debug/rs" }
+```bash
+cargo add tabnas-debug tabnas-parser
 ```
 
 Nothing needs building first: cargo compiles the engine from source.

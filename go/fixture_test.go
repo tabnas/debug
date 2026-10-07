@@ -3,9 +3,10 @@
 package tabnasdebug_test
 
 // Named grammar fixtures shared by the spec runner and the in-language
-// tests. Their TypeScript counterparts are in `ts/test/fixture.js` — the two
-// registries must stay in step, because `test/spec/*.tsv` addresses a
-// grammar by NAME and both runtimes must build the same one.
+// tests. Their TypeScript and Rust counterparts are in `ts/test/fixture.js`
+// and `rs/tests/common/fixture.rs` — the three registries must stay in
+// step, because `test/spec/*.tsv` addresses a grammar by NAME and every
+// runtime must build the same one.
 //
 // The grammars are hand-written against the engine on purpose: @tabnas/abnf
 // must NOT become a dependency of @tabnas/debug (the emitter reads only the

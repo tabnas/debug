@@ -14,8 +14,8 @@ import (
 )
 
 // The canonical section headers, and their order, are pinned for every
-// grammar fixture in test/spec/sections.tsv and run by both runtimes — see
-// parity_test.go and ../test/AGENTS.md.
+// grammar fixture in test/spec/sections.tsv and run by all three runtimes —
+// see parity_test.go and ../test/AGENTS.md.
 
 // buildTreeGrammar installs a small non-trivial grammar on a fresh
 // instance: a `top` rule that open-pushes to a single-character rule name

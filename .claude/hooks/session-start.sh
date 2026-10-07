@@ -1,8 +1,11 @@
 #!/bin/bash
-# SessionStart hook: prepare the repo so both implementations can build,
-# lint, and test. The tabnas parser engine is not published to a
-# registry, so it is fetched from GitHub main into vendor/ and the
-# TypeScript/Go dependencies are wired to that copy.
+# SessionStart hook: prepare the TypeScript and Go sides to build, lint
+# and test. It installs ts/'s dependencies, the published engine among
+# them, and warms the Go build cache; go.mod requires the published engine
+# too. It also runs scripts/fetch-parser.sh, which fetches and builds the
+# engine's GitHub main in vendor/, though nothing in the build or test path
+# reads vendor/ any more (AGENTS.md). rs/ needs a sibling ../parser
+# checkout, which this hook does not provide.
 #
 # Runs only in Claude Code on the web (remote) sessions, which start from
 # a fresh container. Safe to run repeatedly.

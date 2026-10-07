@@ -22,16 +22,18 @@ authoritative cross-runtime divergence register.
 
 ## Install
 
-The `tabnas` crate is not published to a registry, so the engine is
-consumed as a **sibling checkout**, the standard tabnas development
-model. Clone `https://github.com/tabnas/parser` next to this repository
-and point at it:
+The engine is on crates.io as `tabnas-parser`, whose library is named
+`tabnas` in code, and so is this crate, as `tabnas-debug`. The examples
+below name both, so add both:
 
-```toml
-[dependencies]
-tabnas = { package = "tabnas-parser", path = "../parser/rs" }
-tabnas-debug = { path = "../debug/rs" }
+```bash
+cargo add tabnas-debug tabnas-parser
 ```
+
+This repository's own `Cargo.toml` is not the published one: it takes the
+engine by path from a sibling checkout, so a build here needs
+`https://github.com/tabnas/parser` cloned beside it. The release workflow
+swaps that path for a crates.io version when it publishes the crate.
 
 ## Use
 
