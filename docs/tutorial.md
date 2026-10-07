@@ -11,12 +11,10 @@ engine alongside the debug plugin. Pick the track for your language.
 
 ### TypeScript / JavaScript
 
-The plugin resolves the engine from a sibling `../parser` checkout. Build
-that first, then build this package:
+Install the engine and the plugin from npm:
 
 ```bash
-(cd ../parser/ts && npm install && npm run build)
-cd ts && npm install && npm run build
+npm install @tabnas/parser @tabnas/debug
 ```
 
 Create `demo.js`:
@@ -58,14 +56,11 @@ func main() {
 
 ### Rust
 
-The engine crate is unpublished, so it is consumed as a sibling
-checkout. Clone `https://github.com/tabnas/parser` next to this
-repository and declare both by path:
+Both crates are published on crates.io. The engine is added under its
+package name, `tabnas-parser`, though it is `tabnas` in code:
 
-```toml
-[dependencies]
-tabnas = { package = "tabnas-parser", path = "../parser/rs" }
-tabnas-debug = { path = "../debug/rs" }
+```bash
+cargo add tabnas-parser tabnas-debug
 ```
 
 Create `src/main.rs`:

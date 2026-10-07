@@ -33,10 +33,11 @@ proxy** — not the `vendor/` copy `fetch-parser.sh` downloads, and not the
 sibling checkout CI builds. Anything added to the engine on `main` but
 not yet released is invisible here and enforced there.
 
-(Dropping `GOWORK=off` resolves the sibling `../../parser/go` instead,
-because the repo-set `../../go.work` lists `./debug/go`. That is a
-useful second opinion, but the Makefile deliberately uses `GOWORK=off`,
-so a green `make test` alone does not exercise sibling `main`.)
+(Where `admin/scripts/link.sh` has written the repo-set `../../go.work`,
+which lists `./debug/go`, dropping `GOWORK=off` resolves the sibling
+`../../parser/go` instead. That is a useful second opinion, but the
+Makefile deliberately uses `GOWORK=off`, so a green `make test` alone
+does not exercise sibling `main`.)
 
 That gap has already cost one red build: a test bound a fixed literal to
 `#AA`, which an unreleased engine change rejects (matcher tokens cannot be
@@ -50,13 +51,12 @@ go test ./...
 go mod edit -dropreplace github.com/tabnas/parser/go    # do not commit the replace
 ```
 
-The TypeScript side does not have this gap in the fleet checkout:
-`ts/package.json` asks for `"@tabnas/parser": "*"`, but
-`ts/node_modules/@tabnas/parser` is a symlink to the sibling
-`../../parser/ts`, wired by `admin/scripts/link.sh`, so `npm test`
-already runs against sibling `main`. An `npm ci` or a wiped
-`node_modules` silently replaces that symlink with a registry copy and
-reintroduces the gap.
+The TypeScript side has the same gap: `ts/package.json` asks for
+`"@tabnas/parser": "*"`, so `npm install` gives `npm test` the
+published engine. Only where `admin/scripts/link.sh` has replaced
+`ts/node_modules/@tabnas/parser` with a symlink to the sibling
+`../../parser/ts` does `npm test` run against sibling `main`, and an
+`npm ci` or a wiped `node_modules` puts the registry copy back.
 
 ## API notes
 

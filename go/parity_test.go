@@ -7,8 +7,9 @@ package tabnasdebug_test
 //
 // The fixture loader, the ERROR: contract and the row loop all come from
 // github.com/tabnas/support/go, whose TypeScript half ts/test/parity.test.js
-// uses to run the SAME files — so the two implementations cannot drift
-// without one of them going red, and neither can the two loaders.
+// uses to run the SAME files, as rs/tests/parity_test.rs does with its own
+// loader — so the three implementations cannot drift without one of them
+// going red, and neither can support's two loaders.
 //
 // What is left here is only what is specific to debug: a row names a
 // GRAMMAR from the shared registry (fixture_test.go / ts/test/fixture.js),

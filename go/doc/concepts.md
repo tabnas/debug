@@ -141,6 +141,6 @@ project's combined `docs/reference.md`.
    deterministic and diffable, rather than matching TypeScript's exact
    insertion order.
 
-The `Describe` section headers are identical across both runtimes, pinned
-by the shared `test/spec/sections.tsv` fixture that both test suites run,
-so even where the section *bodies* differ, the layout stays diffable.
+The `Describe` section headers are identical across all three runtimes,
+pinned by the shared `test/spec/sections.tsv` fixture that every test suite
+runs, so even where the section *bodies* differ, the layout stays diffable.

@@ -74,9 +74,10 @@ cd go && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go t
 
 Or, from the repository root, `make test-go`. `GOWORK=off` pins the
 engine to that published version; omitting it resolves the sibling
-`../../parser/go` via the repo-set `go.work`. CI does the latter: it
-generates a workspace over the cloned siblings and tests against parser
-`main`, so both resolutions need to pass.
+`../../parser/go` where the `admin` repository's `scripts/link.sh` has
+written a `go.work` one level up. CI does the latter: it generates a
+workspace over the cloned siblings and tests against parser `main`, so both
+resolutions need to pass.
 
 ## License
 

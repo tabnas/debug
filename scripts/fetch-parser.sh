@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Fetch and build the tabnas parser engine from its GitHub main branch.
 #
-# The engine (github.com/tabnas/parser, npm package `tabnas`, Go module
-# github.com/tabnas/parser/go) is not published to a registry, so both
-# implementations consume it from source. This script downloads the main
-# branch over HTTPS into ./vendor (git-ignored) and builds the
-# TypeScript engine so its dist/ is importable.
+# The engine (github.com/tabnas/parser) is published, as @tabnas/parser on
+# npm, as the Go module github.com/tabnas/parser/go and as tabnas-parser on
+# crates.io, and the TypeScript and Go sides install it from there: nothing
+# in the build or test path reads ./vendor any more (AGENTS.md calls this
+# script legacy). It remains for ad-hoc use: it downloads the main branch
+# over HTTPS into ./vendor (git-ignored) and builds the TypeScript engine
+# so its dist/ is importable.
 #
 # Re-run it to refresh to the latest main. Pin a different ref with
 # TABNAS_PARSER_REF.

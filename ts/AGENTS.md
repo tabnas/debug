@@ -12,12 +12,12 @@ tracks it. See [../AGENTS.md](../AGENTS.md) for the parity rules.
   `@tabnas/abnf`, loaded by sibling PATH — never a dependency),
   `test/parity.test.js` (the shared `../test/spec/*.tsv` fixtures) and
   `test/doc-examples.test.js` (executes doc snippets containing `// =>`).
-- The engine dependency `@tabnas/parser` is a `"*"` devDependency, but
-  `node_modules/@tabnas/parser` is a **symlink to the sibling
-  `../../parser/ts`** wired by `admin/scripts/link.sh`. Build that
-  sibling first. Do NOT run `npm ci` or delete `node_modules` — that
-  replaces the symlink with a registry copy. `../scripts/fetch-parser.sh`
-  is legacy and is not a prerequisite.
+- The engine dependency `@tabnas/parser` is a `"*"` devDependency, so
+  `npm install` installs the published engine. To test against sibling
+  `main`, build `../../parser/ts` and run `admin/scripts/link.sh`, which
+  replaces `node_modules/@tabnas/parser` with a **symlink to the sibling**;
+  a later `npm install` or `npm ci` puts the registry copy back.
+  `../scripts/fetch-parser.sh` is legacy and is not a prerequisite.
 
 ```bash
 npm run build
@@ -28,4 +28,4 @@ When you change behaviour here, update the Go port to match within the
 Go engine's API limits (`../go/debug.go`, `../go/model.go`,
 `../go/trace.go`) and refresh `../docs/reference.md` in the same change.
 If the change is expressible as grammar → report, pin it in
-`../test/spec/*.tsv` so both runtimes enforce it.
+`../test/spec/*.tsv` so all three runtimes enforce it.

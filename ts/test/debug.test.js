@@ -87,8 +87,8 @@ describe('debug', () => {
   })
 
   // The canonical section headers, and their order, are pinned for every
-  // grammar fixture in test/spec/sections.tsv and run by both runtimes —
-  // see parity.test.js and ../../test/AGENTS.md.
+  // grammar fixture in test/spec/sections.tsv and run by all three
+  // runtimes — see parity.test.js and ../../test/AGENTS.md.
 
   describe('trace', () => {
     it('emits trace lines and no spurious empty group field on parse lines', () => {

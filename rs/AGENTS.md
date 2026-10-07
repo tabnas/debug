@@ -38,8 +38,9 @@ re-exported function, so a bare ``[`describe`]`` is ambiguous and
 rustdoc drops it; write ``[`describe()`]`` for the function.
 
 The engine crate `tabnas` is a **path dependency on the sibling
-checkout** (`../../parser/rs`) — it is not published, so there is no
-version to fall back on and no second resolution to keep green. Clone
+checkout** (`../../parser/rs`). The engine is on crates.io as
+`tabnas-parser`, but the committed manifest stays path-only, so there is
+no version to fall back on and no second resolution to keep green. Clone
 `https://github.com/tabnas/parser` next to this repo.
 
 ## The five things worth knowing before editing
