@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "tabnas-debug"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "indexmap",
  "regex",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "tabnas-parser"
-version = "0.12.10"
+version = "0.12.11"
 dependencies = [
  "indexmap",
  "regex",
