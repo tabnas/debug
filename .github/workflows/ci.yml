@@ -11,7 +11,7 @@ on:
 
 jobs:
   ci:
-    uses: tabnas/.github/.github/workflows/polyglot-ci.yml@main
+    uses: ./.github/workflows/polyglot-ci-trial.yml
     with:
       deps: "parser support bnf abnf"
       build-order: "parser support bnf debug abnf"
